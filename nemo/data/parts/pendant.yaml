@@ -1,0 +1,102 @@
+# Parts for the ESP32-S3 pendant companion. Sourced through Amazon.ie.
+
+waveshare_esp32s3_lcd_128:
+  name: Waveshare ESP32-S3-LCD-1.28
+  category: mcu
+  datasheet: "Waveshare wiki, ESP32-S3-LCD-1.28 (waveshare.com/wiki), checked; the wiki does not publish a board-level current figure, only the ESP32-S3 chip's own datasheet range and the display/IMU it carries -- current/peak here remain an estimate, not a single sourced spec"
+  logic_v: 3.3
+  supply_v: [5.0, 3.7]
+  current_ma: 110
+  peak_ma: 300
+  size_mm: [39, 39, 9]
+  mount: holes
+  interfaces: [spi, i2c, i2s, uart, ble]
+  # No pin list, on purpose (looked for 2026-10-07, D163). Waveshare's wiki
+  # says which pins the board uses itself (LCD 8-12 and 40, IMU 6, 7, 47,
+  # 48, battery 1, BOOT 0) and that it "leads out most GPIOs", but which
+  # ones reach its connector is only in a picture. A list made from the
+  # chip's table alone would offer pins that may not be on the connector.
+  notes: >
+    All-in-one board: ESP32-S3R2 with 2 MB PSRAM, round 1.28 in LCD, onboard
+    LiPo charging and IMU. PSRAM matters -- ESP-SR wake-word detection wants
+    it. Secure boot and flash encryption are configured in sdkconfig, not
+    at runtime.
+
+sph0645lm4h:
+  name: TECNOIOT SPH0645LM4H I2S MEMS microphone
+  category: sensor
+  datasheet: "Knowles SPH0645LM4H-1 datasheet Rev A: IDD typ. 600 uA at VDD=1.8V, no separate max given, so peak matches typ"
+  logic_v: 3.3
+  supply_v: [3.3]
+  current_ma: 0.6
+  peak_ma: 0.6
+  size_mm: [15, 13, 3]
+  mount: holes
+  interfaces: [i2s]
+  pins:
+    - {name: 3V, function: power, voltage: 3.3}
+    - {name: GND, function: gnd}
+    - {name: BCLK, function: bus, voltage: 3.3}
+    - {name: DOUT, function: bus, voltage: 3.3, direction: out}
+    - {name: LRCL, function: bus, voltage: 3.3}
+    # Adafruit's guide to its SPH0645 breakout (Pinouts, read 2026-10-07):
+    # "By default this pin is low, so that it will transmit on the left
+    # channel mono." Optional for that reason. Not verified for this maker's
+    # board, which is not Adafruit's.
+    - {name: SEL, function: io, voltage: 3.3, optional: true}
+  notes: >
+    Stands in for the INMP441, which is hard to source. Data is left-justified
+    with a one-cycle delay and sits in the upper 18 bits -- the ESP32 I2S
+    driver needs the shift applied or the audio is silent-but-not-quite.
+    Port hole in the enclosure must line up with the package port.
+
+max98357a:
+  name: Adafruit MAX98357A I2S class-D amplifier
+  category: audio
+  datasheet: "Analog Devices (Maxim) MAX98357A/B datasheet Rev 16: IDD typ. 2.4 mA at VDD=3.7V (quiescent, no audio). Peak is derived from the rated 3.2W into 4 ohm at 5V output power, not a published max-current spec -- the datasheet gives no figure for current while actually driving a speaker"
+  logic_v: 3.3
+  supply_v: [3.3, 5.0]
+  current_ma: 2.4
+  peak_ma: 700          # derived: 3.2W / 5V, roughly, at typical efficiency -- see datasheet note above
+  size_mm: [19.4, 17.8, 3.0]   # Adafruit MAX98357A mono breakout, adafruit.com/product/3006
+  mount: holes
+  interfaces: [i2s]
+  pins:
+    - {name: VIN, function: power, voltage: 5.0}
+    - {name: GND, function: gnd}
+    # D166, from Adafruit's guide to this breakout (Pinouts page, read
+    # 2026-10-07): GAIN is 9 dB "when not connected to anything"; the board
+    # carries "a 1Mohm resistor from SD to Vin", so the amplifier is on with
+    # SD left alone. Both are marked optional for that reason. The speaker
+    # goes on "3.5mm screw-terminal blocks", bridge-tied outputs the page
+    # gives no labels for: OUT+ and OUT- are this library's names.
+    - {name: SD, function: io, voltage: 3.3, optional: true}
+    - {name: GAIN, function: io, optional: true}
+    - {name: DIN, function: bus, voltage: 3.3, direction: in}
+    - {name: BCLK, function: bus, voltage: 3.3}
+    - {name: LRC, function: bus, voltage: 3.3}
+    - {name: OUT+, function: speaker}
+    - {name: OUT-, function: speaker}
+  notes: >
+    SD pin selects mono mixing as well as shutdown -- leaving it floating
+    gives you right channel only. Peak draw is the number that sizes the
+    battery, not the typical.
+
+eemb_lipo_500:
+  name: EEMB 500 mAh LiPo cell
+  category: power
+  datasheet: "EEMB's own 500 mAh cell is the LP902030 (eemb.com/product-152): 32.0 x 20.5 x 9.3 mm. The 502030 footprint (5.3 mm thick) that this entry used to list is EEMB's 250 mAh cell, not 500 -- no EEMB part matches 500 mAh at 5 mm thick. Discharge current is by analogy with EEMB's same-family LP502030 datasheet (up to 2C rated for the Standard-Type line), not a 902030-specific datasheet"
+  supply_v: [3.7]
+  current_ma: 500       # 1C, by analogy -- see datasheet note
+  peak_ma: 1000         # 2C, by analogy -- see datasheet note
+  size_mm: [32.0, 20.5, 9.3]
+  mount: slot
+  # D150. A cell has two leads. These two names are Nemo's own, not a
+  # manufacturer's marking.
+  pins:
+    - {name: "BAT+", function: power, voltage: 3.7, direction: out}
+    - {name: "BAT-", function: gnd}
+  notes: >
+    3.7 V nominal, 4.2 V charged, 3.0 V cutoff. Needs a protection circuit
+    if the board does not have one. Do not design a rigid pocket with zero
+    clearance -- cells swell with age.

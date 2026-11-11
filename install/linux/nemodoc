@@ -1,0 +1,393 @@
+#!/bin/bash
+# nemodoc: check this machine, fix what is missing, start Nemo.
+# The Linux counterpart of NemoDoc.cmd.
+#
+# Rewritten on 2026-10-08. The original nemodoc and its system/ folder
+# were lost; this one was written from what Nemo's own code and tests
+# expect of it. What the original did and this does NOT:
+#   - arm or verify full-disk encryption and boot-chain tamper evidence
+#     (nemo/lockdown.py is still there; nothing here calls it at boot);
+#   - verify a SIGNED integrity manifest. The manifest checked below is a
+#     plain list of hashes made when the image was built. It shows that a
+#     file changed by accident. Anyone able to change a file can change
+#     the list as well.
+#
+#   nemodoc                 check, fix, launch
+#   nemodoc --check-only    diagnose, change nothing
+#   nemodoc --no-launch     fix everything, do not start
+#   nemodoc --mode talk     choose the mode instead of letting Nemo choose
+#   nemodoc --models        also download the language models (about 6.5 GB)
+#                           and the Artist's image model for story covers
+#                           (2 GB), each only if not on the Windows disk
+#   nemodoc --prompt        start Nemo at its prompt window (the desktop's
+#                           autostart entry does this at every boot)
+#   nemodoc --fit           build a llama-server for THIS machine's CPU (AVX
+#                           or AVX2) and keep it on the stick, so every later
+#                           boot on a machine like it uses it (nemo-fit;
+#                           needs a network)
+#
+# Each thing it looks after is a pair: t_<name> tests, f_<name> fixes.
+set -u
+
+PREFIX="${NEMO_PREFIX:-/opt/nemo}"
+APP="$PREFIX/app"
+VENV="$PREFIX/venv"
+HERE="$(cd "$(dirname "$(readlink -f "$0")")" && pwd)"
+STATE="${NEMO_HOME:-$HOME/.nemo}"
+LOG="$STATE/nemodoc.log"
+LLAMA_TAG="b11175"
+ARTIST_DIR="$PREFIX/artist"         # where nemo/artist.py looks on Linux
+
+CHECK_ONLY=0; NO_LAUNCH=0; MODE=""; WANT_MODELS=0; PROMPT=0; WANT_FIT=0
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --check-only) CHECK_ONLY=1 ;;
+        --no-launch)  NO_LAUNCH=1 ;;
+        --models)     WANT_MODELS=1 ;;
+        --prompt)     PROMPT=1 ;;
+        --fit)        WANT_FIT=1 ;;
+        --mode)       shift; MODE="${1:-}" ;;
+        -h|--help)    sed -n '2,29p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        *) echo "unknown option $1 (try --help)" >&2; exit 2 ;;
+    esac
+    shift
+done
+
+mkdir -p "$STATE"
+log()  { printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$*" >>"$LOG"; }
+say()  { printf '%s\n' "$*"; log "$*"; }
+ok()   { say "[ ok ] $*"; }
+bad()  { say "[fail] $*"; }
+note() { say "[    ] $*"; }
+as_root() { if [ "$(id -u)" -eq 0 ]; then "$@"; else sudo "$@"; fi; }
+
+PROBLEMS=0
+
+# ----------------------------------------------------------- the stick
+# Work kept on the USB stick (NemoData) comes back before anything else,
+# so Nemo opens on it. Only nemo-sync may run as root without a password.
+SYNC=/usr/local/sbin/nemo-sync
+if [ -x "$SYNC" ]; then
+    if [ "$CHECK_ONLY" -eq 1 ]; then
+        note "Work: $("$SYNC" status "$(id -un)" 2>&1 | sed 's/^nemo-sync: //')"
+    elif out="$(sudo -n "$SYNC" restore "$(id -un)" 2>&1)"; then
+        ok "Work: ${out#nemo-sync: }"
+    else
+        note "Work: ${out#nemo-sync: }"
+    fi
+fi
+
+# name|repository|file -- the list in nemo/offline.py; a test holds them together
+MODELS=(
+    "gemma3-1b|unsloth/gemma-3-1b-it-GGUF|gemma-3-1b-it-Q4_K_M.gguf"
+    "qwen3-1.7b|unsloth/Qwen3-1.7B-GGUF|Qwen3-1.7B-Q4_K_M.gguf"
+    "qwen2.5-coder-3b|Qwen/Qwen2.5-Coder-3B-Instruct-GGUF|qwen2.5-coder-3b-instruct-q4_k_m.gguf"
+    "qwen3-4b|Qwen/Qwen3-4B-GGUF|Qwen3-4B-Q4_K_M.gguf"
+)
+
+# ---------------------------------------------------------------- python
+t_python() {
+    command -v python3 >/dev/null 2>&1 || return 1
+    python3 - <<'PY' >/dev/null 2>&1
+import sys, venv, tkinter, yaml, cryptography
+sys.exit(0 if sys.version_info >= (3, 11) else 1)
+PY
+}
+f_python() {
+    as_root apt-get install -y --no-install-recommends \
+        python3 python3-venv python3-tk python3-yaml python3-cryptography python3-pypdf
+}
+
+# ------------------------------------------------------------------ nemo
+# D51/D52. 'import nemo' run from the folder that holds the source finds
+# it there with nothing installed. So: from /, and with -I, which keeps
+# the working directory and the user's own site folder out of the search.
+t_nemo() {
+    [ -x "$VENV/bin/nemo" ] || return 1
+    ( cd / && "$VENV/bin/python" -I -c "import nemo" ) >/dev/null 2>&1
+}
+f_nemo() {
+    [ -f "$APP/pyproject.toml" ] || { bad "no Nemo source at $APP"; return 1; }
+    as_root python3 -m venv --system-site-packages "$VENV" || return 1
+    # Its three dependencies are Debian's own packages (see f_python), so
+    # nothing is fetched here and this works with no network.
+    as_root "$VENV/bin/pip" install --no-deps --no-build-isolation --quiet "$APP"
+}
+
+# ----------------------------------------------------------------- llama
+t_llama() { "$PREFIX/bin/llama-server" --version >/dev/null 2>&1; }
+f_llama() {
+    if [ -x "$HERE/build-llama.sh" ]; then
+        as_root "$HERE/build-llama.sh" "$PREFIX"
+        return
+    fi
+    # The same build, for an install that has lost the script.
+    local src=/var/tmp/nemo-llama
+    as_root rm -rf "$src"
+    as_root git clone --depth 1 --branch "$LLAMA_TAG" https://github.com/ggml-org/llama.cpp "$src" || return 1
+    as_root cmake -S "$src" -B "$src/build" -DCMAKE_BUILD_TYPE=Release \
+        -DBUILD_SHARED_LIBS=OFF -DGGML_NATIVE=OFF -DGGML_SSE42=ON \
+        -DGGML_AVX=OFF -DGGML_AVX2=OFF -DGGML_FMA=OFF -DGGML_F16C=OFF -DGGML_BMI2=OFF \
+        -DLLAMA_CURL=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF || return 1
+    as_root cmake --build "$src/build" --target llama-server -j "$(nproc)" || return 1
+    as_root install -D -m 0755 "$src/build/bin/llama-server" "$PREFIX/bin/llama-server"
+}
+
+# ---------------------------------------------------------------- models
+t_models() {
+    local row name
+    for row in "${MODELS[@]}"; do
+        name="${row%%|*}"
+        ls "$STATE/models/$name"*.gguf >/dev/null 2>&1 || return 1
+    done
+}
+f_models() {
+    # Not the Artist's here: its section below looks on the Windows disk first.
+    if [ -x "$HERE/fetch-models.sh" ]; then "$HERE/fetch-models.sh" --no-artist; return; fi
+    local row name repo file rest
+    mkdir -p "$STATE/models"
+    for row in "${MODELS[@]}"; do
+        name="${row%%|*}"; rest="${row#*|}"; repo="${rest%%|*}"; file="${rest#*|}"
+        [ -s "$STATE/models/$name.gguf" ] && continue
+        curl -fL --retry 3 -C - -o "$STATE/models/$name.gguf.part" \
+            "https://huggingface.co/$repo/resolve/main/$file" \
+            && mv "$STATE/models/$name.gguf.part" "$STATE/models/$name.gguf" || return 1
+    done
+}
+
+# --------------------------------------------- models already on Windows
+# On a machine that also runs NemoWin the models are on the Windows disk
+# already, in C:\Nemo\models. Over a phone's hotspot 6.5 GB is hours and a
+# data allowance; read from the disk it costs nothing. The Windows
+# partition is mounted READ-ONLY and nothing is written to it: with
+# Windows' Fast Startup on, as it is on the AH531, the partition is left
+# hibernated, and writing to it then can lose what Windows had open.
+WIN_MNT=/mnt/nemo-windows
+windows_models() { windows_folder Nemo/models '*.gguf'; }
+windows_artist() { windows_folder Nemo/artist 'sd_turbo*.gguf'; }
+windows_folder() {      # windows_folder <folder> <files>: prints the folder found; 1 if none
+    local want="$1" files="$2" dev fs dir mounted
+    command -v lsblk >/dev/null 2>&1 || return 1
+    while read -r dev fs; do
+        [ "$fs" = ntfs ] || continue
+        dir="$WIN_MNT/$(basename "$dev")"
+        mounted=0
+        if ! mountpoint -q "$dir" 2>/dev/null; then
+            as_root mkdir -p "$dir" || continue
+            if as_root mount -t ntfs-3g -o ro "$dev" "$dir" >>"$LOG" 2>&1 \
+                    || as_root mount -o ro "$dev" "$dir" >>"$LOG" 2>&1; then
+                mounted=1
+            else
+                continue
+            fi
+        fi
+        # $files unquoted: it is a pattern, to be expanded
+        if ls "$dir"/$want/$files >/dev/null 2>&1; then
+            echo "$dir/$want"
+            return 0
+        fi
+        [ "$mounted" -eq 1 ] && as_root umount "$dir" >>"$LOG" 2>&1
+    done < <(lsblk -rpno NAME,FSTYPE 2>/dev/null)
+    return 1
+}
+link_models() {         # link_models <folder>: its models, linked into ours
+    local f n=0
+    mkdir -p "$STATE/models"
+    for f in "$1"/*.gguf; do
+        [ -e "$STATE/models/$(basename "$f")" ] && continue
+        ln -s "$f" "$STATE/models/$(basename "$f")" && n=$((n + 1))
+    done
+    echo "$n"
+}
+
+# ------------------------------------------------------------ the Artist
+# Story covers (2026-10-20): sd-cli, built into the image by build-sd.sh,
+# and SD-Turbo with the TAESD decoder beside it in $ARTIST_DIR. Optional:
+# reported, never counted as a problem. The model is 2 GB, and on a live
+# boot $ARTIST_DIR is in RAM like the home (unless the stick's persistence
+# is on), so the copy NemoWin keeps on the Windows disk, C:\Nemo\artist, is
+# linked read-only first; only with --models is it fetched, hash-checked,
+# and only where there is room (fetch-models.sh).
+t_artist_engine() { "$ARTIST_DIR/sd/sd-cli" --version >/dev/null 2>&1; }
+t_artist_model() { ls "$ARTIST_DIR"/sd_turbo*.gguf >/dev/null 2>&1; }
+link_artist() {         # link_artist <folder>: its image model and decoder, linked into ours
+    local f n=0
+    for f in "$1"/sd_turbo*.gguf "$1"/taesd.safetensors; do
+        [ -e "$f" ] || continue
+        [ -e "$ARTIST_DIR/$(basename "$f")" ] && continue
+        ln -s "$f" "$ARTIST_DIR/$(basename "$f")" && n=$((n + 1))
+    done
+    echo "$n"
+}
+
+# --------------------------------------------------------------- network
+# For a phone's hotspot over wifi, or the phone on a USB cable with
+# tethering on. Reported, not fixed: joining a network needs its password.
+t_network() {
+    [ "$(nmcli -t -f STATE general 2>/dev/null)" = "connected" ]
+}
+
+# ------------------------------------------------------------- integrity
+t_integrity() {
+    [ -f "$PREFIX/manifest.sha256" ] || return 2
+    ( cd "$APP" && sha256sum --quiet -c "$PREFIX/manifest.sha256" ) >>"$LOG" 2>&1
+}
+
+# ------------------------------------------------------------------ run
+step() {     # step <name> <what it is> [fixable]
+    local name="$1" what="$2" fixable="${3:-yes}"
+    if "t_$name"; then ok "$what"; return 0; fi
+    if [ "$CHECK_ONLY" -eq 1 ] || [ "$fixable" != "yes" ]; then
+        bad "$what"; PROBLEMS=$((PROBLEMS + 1)); return 1
+    fi
+    note "$what: missing, fixing"
+    if "f_$name" >>"$LOG" 2>&1 && "t_$name"; then ok "$what (fixed)"; return 0; fi
+    bad "$what: could not be fixed. See $LOG"; PROBLEMS=$((PROBLEMS + 1)); return 1
+}
+
+say "nemodoc, $(date '+%Y-%m-%d %H:%M')"
+step python "Python 3.11 or later, with Tk"
+step nemo   "Nemo package"
+step llama  "llama-server ($LLAMA_TAG)"
+
+# ------------------------------------------- an engine fitted to this CPU
+# The image's llama-server uses nothing newer than SSE4.2, so it starts on
+# any machine. One built for this CPU's level (nemo-fit) is kept on the
+# stick and used where the level and its hash match.
+FIT="$HERE/nemo-fit"
+if [ -x "$FIT" ]; then
+    LEVEL="$("$FIT" level)"
+    if [ "$LEVEL" = sse42 ]; then
+        note "This CPU has no AVX. The image's llama-server is built for it."
+    elif [ "$CHECK_ONLY" -eq 1 ]; then
+        if kept="$("$FIT" find 2>>"$LOG")"; then ok "A llama-server built for this CPU ($LEVEL) is kept in $kept"
+        else note "This CPU has $LEVEL; no llama-server built for it is kept. nemodoc --fit builds one (needs a network)."; fi
+    else
+        if ! kept="$("$FIT" use 2>>"$LOG")" && [ "$WANT_FIT" -eq 1 ]; then
+            note "Building a llama-server for this CPU ($LEVEL): about 10 to 30 minutes, with a network"
+            if "$FIT" build >>"$LOG" 2>&1 && kept="$("$FIT" use 2>>"$LOG")"; then
+                # Onto the stick now, not at the next two-minute save.
+                if [ -x "$SYNC" ] && sudo -n "$SYNC" save "$(id -un)" >>"$LOG" 2>&1; then
+                    ok "Built for this CPU ($LEVEL) and kept on the stick"
+                else
+                    note "Built for this CPU ($LEVEL); NOT on the stick (no stick, or the save failed: see $LOG)"
+                fi
+            else
+                kept=""
+                bad "The llama-server for this CPU could not be built. The image's one is used. See $LOG"
+            fi
+        fi
+        if [ -n "${kept:-}" ]; then
+            export PATH="$kept:$PATH"
+            ok "llama-server built for this CPU ($LEVEL), from the stick"
+        else
+            note "This CPU has $LEVEL; the image's llama-server does not use it. nemodoc --fit builds one for this CPU (needs a network) and keeps it on the stick."
+        fi
+    fi
+fi
+
+t_integrity; rc=$?
+case $rc in
+    0) ok "Nemo's files match the list made when the image was built" ;;
+    2) note "No file list at $PREFIX/manifest.sha256, so the files are not compared" ;;
+    *) bad "Some of Nemo's files differ from the list made at build time. The names are in $LOG."
+       note "That list is not signed: it shows an accident, not a deliberate change."
+       PROBLEMS=$((PROBLEMS + 1)) ;;
+esac
+
+if t_network; then ok "Network: connected"
+else note "No network. For a phone's hotspot: the network icon at the top right, then the hotspot's name and its password. Or the phone on a USB cable with USB tethering on."; fi
+
+if t_models; then ok "Language models"
+else
+    found=""
+    # Looking means mounting, which --check-only does not do.
+    [ "$CHECK_ONLY" -eq 0 ] && found="$(windows_models)"
+    if [ -n "$found" ]; then
+        n="$(link_models "$found")"
+        if t_models; then ok "Language models: read from the Windows disk ($found), read-only, $n linked"
+        else note "Some models were found on the Windows disk ($found) and linked; others are still missing"; fi
+    fi
+    if ! t_models; then
+        if [ "$WANT_MODELS" -eq 1 ] && [ "$CHECK_ONLY" -eq 0 ]; then step models "Language models"
+        elif [ "$CHECK_ONLY" -eq 1 ]; then
+            note "Language models are not all here. Run nemodoc without --check-only: it looks for them on a Windows disk (C:\\Nemo\\models) first."
+        else
+            note "Language models are not all here, and none were found on a Windows disk. Fetch them with: nemodoc --models (about 6.5 GB)"
+        fi
+    fi
+fi
+
+if ! t_artist_engine; then
+    note "Story covers: no image engine ($ARTIST_DIR/sd/sd-cli); this image was built without it. build-sd.sh builds it, as root, with cmake and a network."
+elif t_artist_model; then ok "Story covers (the Artist)"
+else
+    found=""
+    # Looking means mounting, which --check-only does not do.
+    [ "$CHECK_ONLY" -eq 0 ] && found="$(windows_artist)"
+    [ -n "$found" ] && link_artist "$found" >/dev/null
+    if t_artist_model; then
+        ok "Story covers: the image model read from the Windows disk ($found), read-only"
+    elif [ "$WANT_MODELS" -eq 1 ] && [ "$CHECK_ONLY" -eq 0 ]; then
+        note "Story covers: fetching the image model (2 GB)"
+        if NEMO_ARTIST="$ARTIST_DIR" "$HERE/fetch-models.sh" artist >>"$LOG" 2>&1 && t_artist_model; then
+            ok "Story covers: the image model fetched and hash-checked"
+        else
+            note "Story covers: the image model was not fetched. Why is in $LOG"
+        fi
+    else
+        note "Story covers: no image model here or on a Windows disk (C:\\Nemo\\artist). nemodoc --models fetches it: 2 GB, which on a live boot without persistence is held in RAM."
+    fi
+fi
+
+for tool in kicad-cli dot git pio; do
+    if command -v "$tool" >/dev/null 2>&1; then ok "$tool"
+    else note "$tool not found: the step that needs it will say so and skip"; fi
+done
+if "$PREFIX/cadcraft/cadcraft-cli" --version >/dev/null 2>&1; then ok "Workshop drawings (CADCraft)"
+else note "CADCraft not found: the enclosure step makes no dimensioned drawing, and says so"; fi
+if "$PREFIX/wordcraft/wordcraft-cli" --version >/dev/null 2>&1; then ok "Books and the pack PDF (WordCraft)"
+else note "WordCraft not found: stories stay as story.md, and the pack has no PDF"; fi
+
+# Speaking to Nemo: offline, Vosk and its small English model (redesign).
+if [ -d "$PREFIX/speech/vosk-model-small-en-us-0.15" ] && command -v arecord >/dev/null 2>&1 &&
+        "$VENV/bin/python" -c "import vosk" 2>/dev/null; then
+    ok "Speech (offline): the prompt window's Speak button works"
+else
+    note "Speech is not set up here: the Speak button will say so. Typing works."
+fi
+
+# Credits (owner, 2026-11-11): who made everything Nemo is built from, in
+# the Storeroom; written each run (not by --check-only, which writes nothing).
+CREDITS="${HOME}/nemo-storeroom/credits/index.html"
+if [ "$CHECK_ONLY" -eq 1 ]; then
+    [ -f "$CREDITS" ] && say "Who made what Nemo is built from: file://$CREDITS"
+elif t_nemo && line="$("$VENV/bin/nemo" credits 2>>"$LOG" | grep '^Credits: ' | tail -1)" \
+        && [ -n "$line" ]; then
+    say "Who made what Nemo is built from: ${line#Credits: }"
+fi
+
+if [ "$PROBLEMS" -gt 0 ]; then
+    say "$PROBLEMS thing(s) need attention. Log: $LOG"
+    [ "$CHECK_ONLY" -eq 1 ] && exit 1
+fi
+[ "$CHECK_ONLY" -eq 1 ] && { say "Nothing blocking."; exit 0; }
+[ "$NO_LAUNCH" -eq 1 ] && exit $((PROBLEMS > 0))
+t_nemo || { bad "Nemo is not installed, so there is nothing to start."; exit 1; }
+
+# Updates (owner, 2026-10-23): a NemoWin.zip on the Windows disk, read-only;
+# Nemo offers it if it is newer (nemo/update.py), and runs the one he chose.
+if found="$(windows_folder Nemo/dist 'NemoWin.zip')"; then
+    export NEMO_UPDATE_ZIP="$found/NemoWin.zip"
+fi
+USE_FILE="$HOME/.nemo/updates/use"
+if [ -f "$USE_FILE" ] && [ -f "$(cat "$USE_FILE")/nemo/__init__.py" ]; then
+    export PYTHONPATH="$(cat "$USE_FILE")"
+    note "Running the updated Nemo in $PYTHONPATH (nemo update --stop goes back to the image's)"
+fi
+
+if [ -n "$MODE" ]; then "$VENV/bin/nemo" mode "$MODE" || note "Mode $MODE did not start."; fi
+if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
+    if [ "$PROMPT" -eq 1 ]; then exec "$VENV/bin/nemo" gui --prompt
+    else exec "$VENV/bin/nemo" gui; fi
+else say "No display here. Nemo's commands: $VENV/bin/nemo --help"; fi

@@ -1,0 +1,79 @@
+engine:
+  local: http://127.0.0.1:8080/v1
+  local_model: qwen3-4b
+  review: null
+  review_base: https://openrouter.ai/api/v1
+  search: null
+  timeout_s: 1800
+  thinking_off:
+  - story
+  - template_fill
+  - cad_script
+  - firmware
+  constrain_output: true
+checks:
+  tier0:
+  - erc
+  - drc
+  - solid
+  - thickness
+  - compile
+  - current_sum
+  - wire_gauge
+  - xref
+  tier1:
+    datasheets: ./datasheets
+    web: on_missing_part
+  tier2:
+    trigger: before_export
+    scope: contradictions|failure_modes
+hardware:
+  printer: Creality Kobra 3
+  build_volume_mm:
+  - 250
+  - 250
+  - 260
+  nozzle_mm: 0.4
+  layer_mm: 0.2
+  min_wall_mm: 1.2
+  supportless_overhang_deg: 50
+routing:
+  template_fill: local
+  cad_script: local_then_review
+  design_reason: remote
+  firmware: local_then_review
+  offline: degrade_to_local
+  story: local
+modes: &id001
+  design:
+    model: qwen3-4b
+    ctx: 4096
+    ram_mb: 3200
+    tools_mb: 300
+  build:
+    model: qwen2.5-coder-3b
+    ctx: 4096
+    ram_mb: 2100
+    tools_mb: 700
+  talk:
+    model: qwen3-1.7b
+    ctx: 8192
+    ram_mb: 2100
+    tools_mb: 400
+  tiny:
+    model: gemma3-1b
+    ctx: 2048
+    ram_mb: 900
+    tools_mb: 200
+modes_windows: *id001
+# auto: run the models on an NVIDIA GPU that can hold them (with the CUDA
+# engine NemoDoc fetches), else on the CPU. laptop or desktop forces one.
+machine: auto
+paths:
+  projects: ~/nemo-projects
+  parts: ~/nemo-parts
+  datasheets: ~/nemo-datasheets
+  stories: ~/nemo-stories
+  storeroom: ~/nemo-storeroom
+  models: ~/nemo-models
+  llama_server: C:/Nemo/engine/llama-server.exe

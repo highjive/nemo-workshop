@@ -1,0 +1,142 @@
+# Parts for the RFID card-triggered audio player (treasure-chest build).
+# Figures taken from datasheets. If you change a number here, note where
+# it came from -- this file is the reason Nemo does not have to guess.
+
+rc522:
+  name: MFRC522 13.56 MHz RFID reader module
+  category: sensor
+  logic_v: 3.3
+  supply_v: [3.3]
+  current_ma: 26
+  peak_ma: 100          # during transmit burst
+  size_mm: [60, 39, 5]
+  mount: holes
+  interfaces: [spi]
+  pins:
+    - {name: VCC, function: power, voltage: 3.3}
+    - {name: RST, function: io}
+    - {name: GND, function: gnd}
+    - {name: MISO, function: bus, direction: out}
+    - {name: MOSI, function: bus, direction: in}
+    - {name: SCK, function: bus}
+    - {name: SDA, function: bus}
+  notes: >
+    NOT 5 V tolerant on VCC. Logic pins survive 5 V on most clone boards but
+    do not rely on it. Antenna is the large PCB coil -- keep metal and the
+    speaker magnet away from it, and keep the enclosure section above the
+    coil thin or read range collapses.
+  datasheet: NXP MFRC522 rev 3.9
+
+dfplayer_mini:
+  name: DFPlayer Mini MP3 module
+  category: audio
+  datasheet: "FN-M16P datasheet p2 (the module DFPlayer Mini is built on): 3.3-5.0 V, under 15 mA rated"
+  logic_v: 3.3
+  # FN-M16P datasheet (the module the DFPlayer Mini is built on), p2:
+  # working voltage DC 3.3-5.0 V, typical 4.2 V, rated current under 15 mA.
+  # Earlier revisions recorded 5 V only, which wrongly ruled out battery
+  # power. Found by Nemo's own datasheet search.
+  supply_v: [5.0, 4.2, 3.7, 3.3]
+  current_ma: 15
+  peak_ma: 200          # with speaker driven hard
+  size_mm: [20, 20, 4]
+  mount: holes
+  interfaces: [uart]
+  pins:
+    - {name: VCC, function: power, voltage: 5.0}
+    - {name: RX, function: io, voltage: 3.3, direction: in}
+    - {name: TX, function: io, voltage: 3.3, direction: out}
+    - {name: SPK_1, function: speaker}
+    - {name: GND, function: gnd}
+    - {name: SPK_2, function: speaker}
+    - {name: BUSY, function: io, voltage: 3.3}
+  notes: >
+    Runs from 3.3 to 5.0 V (datasheet p2), so a 1S LiPo works until the cell
+    falls below 3.3 V near the end of its charge. UART is 3.3 V logic. Put 1k in series on RX from a
+    5 V MCU. Onboard amp drives 3 W into 8 ohm; SPK pins are bridged, so
+    never tie either to ground.
+
+speaker_8ohm_20mm:
+  name: 20 mm 8 ohm speaker
+  category: actuator
+  datasheet: "generic 20 mm mylar-cone speaker (e.g. Adafruit product 1890); size and impedance from typical vendor listings for this common form factor, not one manufacturer's datasheet -- a passive speaker draws no supply current of its own, so current/peak stay 0"
+  supply_v: []
+  current_ma: 0
+  size_mm: [20, 20, 5]
+  mount: panel
+  # D139: with no pins listed the model made up names for them (one was
+  # "speaker_8ohm") and wired one to a GPIO. A speaker has two terminals;
+  # these two names are Nemo's own, not a manufacturer's marking.
+  pins:
+    - {name: SPK_A, function: speaker}
+    - {name: SPK_B, function: speaker}
+  # The one distance the notes in this library give. Enforced by the
+  # enclosure step since D142; the note below is where it comes from.
+  keep_apart: {rc522: 25}
+  notes: Magnet will affect the RC522 antenna. Keep at least 25 mm apart.
+
+esp32_devkit_v1:
+  name: ESP32 DevKit v1 (30-pin)
+  category: mcu
+  datasheet: "Espressif ESP32 Datasheet V3.1, Table 'Current Consumption Depending on RF Modes': Wi-Fi TX peak ~240 mA at 3.3V (802.11b, +19.5 dBm). This dev board adds a USB-serial chip and an LDO, so board-level current is a little above the bare-chip figure -- current/peak here are a board-level estimate consistent with that datasheet, not the chip datasheet's own number restated"
+  logic_v: 3.3
+  supply_v: [5.0, 3.3]
+  current_ma: 80
+  peak_ma: 260          # wifi transmit -- see datasheet note
+  size_mm: [51.5, 28.5, 13]
+  mount: holes
+  interfaces: [spi, i2c, uart, i2s]
+  # D144. Only the pins Espressif's own GPIO summary for the ESP32 lists
+  # with no caveat (ESP-IDF Programming Guide v6.1, Peripherals > GPIO &
+  # RTC GPIO, read 2026-10-06). Left out, and why, from the same table:
+  #   0, 2, 5, 12, 15  strapping pins: they set the boot mode at start-up
+  #   1, 3             TXD and RXD, "usually used for flashing and debugging"
+  #   6-11, 16, 17     "usually connected to the SPI flash and PSRAM integrated
+  #                    on the module and therefore should not be used"
+  #   13, 14           JTAG
+  #   34-39            input only, no pull-up or pull-down
+  # Not verified: that each of these eleven is on this board's 30-pin
+  # header, or where. With no list at all the model wired a sensor's
+  # interrupt to GPIO0 and an LED ring to the same pin written "D0".
+  pins:
+    - {name: 3V3, function: power, voltage: 3.3}
+    - {name: VIN, function: power, voltage: 5.0}
+    - {name: GND, function: gnd}
+    - {name: GPIO4, function: io, voltage: 3.3}
+    - {name: GPIO18, function: io, voltage: 3.3}
+    - {name: GPIO19, function: io, voltage: 3.3}
+    - {name: GPIO21, function: io, voltage: 3.3}
+    - {name: GPIO22, function: io, voltage: 3.3}
+    - {name: GPIO23, function: io, voltage: 3.3}
+    - {name: GPIO25, function: io, voltage: 3.3}
+    - {name: GPIO26, function: io, voltage: 3.3}
+    - {name: GPIO27, function: io, voltage: 3.3}
+    - {name: GPIO32, function: io, voltage: 3.3}
+    - {name: GPIO33, function: io, voltage: 3.3}
+  notes: >
+    Onboard regulator accepts 5 V on VIN. The 3.3 V rail on these boards is
+    good for roughly 600 mA; budget accordingly before hanging modules off it.
+
+tp4056_protected:
+  name: TP4056 charger with DW01 protection
+  category: power
+  datasheet: "TP4056 charger IC + DW01A protection IC, default 1 A charge current via the 1.2k Rprog resistor -- widely documented across TP4056 module vendor datasheets (e.g. best-microcontroller-projects.com/tp4056.html). Module PCB size varies by vendor and connector (micro-USB vs Type-C), roughly 26-29 x 17 mm across the ones checked; the figure here is representative, not one manufacturer's exact spec"
+  supply_v: [5.0]
+  current_ma: 1000
+  size_mm: [26, 17, 4]
+  mount: holes
+  # D150. Battery and output pads as the page cited above names them:
+  # "connect the battery to B+ and B-", "take the output voltage from
+  # OUT+ and OUT-" (read 2026-10-07). The protection sits between B- and
+  # OUT-, so those are two different points: the cell goes to B+ and B-
+  # only, and everything downstream to OUT+ and OUT-. The 5 V input is
+  # the module's USB socket; its pads are not listed here.
+  pins:
+    - {name: "B+", function: power, voltage: 3.7, direction: in}
+    - {name: "B-", function: gnd}
+    - {name: "OUT+", function: power, voltage: 3.7, direction: out}
+    - {name: "OUT-", function: gnd}
+  notes: >
+    Charge current set by the programming resistor, 1 A default. The
+    protected variant has four pads -- use it, the bare one has no
+    over-discharge cutoff.

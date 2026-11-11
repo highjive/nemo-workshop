@@ -1,0 +1,163 @@
+#!/bin/sh
+# nemo-sync: keep a live session's work on the USB stick it booted from.
+#
+#   nemo-sync save    [USER]   copy ~/nemo-projects, ~/nemo-stories, ~/.nemo/engines (nemo-fit),
+#                              ~/nemo-storeroom and ~/nemo-models to NemoData
+#                              on the stick
+#   nemo-sync restore [USER]   copy them back into the home folder
+#   nemo-sync status  [USER]   say where the work is kept, change nothing
+#
+# Runs as root (a systemd timer, and the live user through one sudoers line
+# that allows this script and nothing else). On a live system the home
+# folder is in memory and the boot stick is mounted read-only, so this is
+# what makes created work survive a restart (owner's request, 2026-10-17).
+#
+# It writes ONLY to the medium the system booted from, ONLY when that is a
+# FAT or exFAT file system (a stick written by Rufus in ISO mode), and only
+# inside its NemoData folder. A DVD or an ISO in an emulator is iso9660 and
+# is left alone; the Windows disk is never touched. After each save the
+# stick is made read-only again, so a pulled stick or a power cut is least
+# likely to catch it half written. Deleted files are not deleted from the
+# stick: they are moved to NemoData/.removed, newest first, so a mistake can
+# be undone from Windows.
+set -eu
+
+ACTION="${1:-status}"
+USER_NAME="${2:-${SUDO_USER:-nemo}}"
+MEDIUM="${NEMO_MEDIUM:-/run/live/medium}"
+FOLDERS="nemo-projects nemo-stories nemo-storeroom nemo-models .nemo/keys .nemo/art .nemo/engines"
+
+case "$USER_NAME" in
+    *[!a-z0-9_-]*|"") echo "nemo-sync: not a user name: $USER_NAME" >&2; exit 2 ;;
+esac
+HOME_DIR="$(getent passwd "$USER_NAME" | cut -d: -f6)"
+[ -n "$HOME_DIR" ] && [ -d "$HOME_DIR" ] || { echo "nemo-sync: no home for $USER_NAME" >&2; exit 2; }
+
+# NEMO_SYNC_TEST=1 skips the mount checks and remounts, so the copying can
+# be tested in a plain folder (tests/test_nemo_sync.py). sudo's env_reset
+# drops it, so the sudoers line cannot be used to pass it.
+if [ "${NEMO_SYNC_TEST:-0}" = 1 ]; then
+    FSTYPE=vfat
+    HOME_DIR="${NEMO_SYNC_HOME:-$HOME_DIR}"
+    mount() { :; }
+elif ! mountpoint -q "$MEDIUM" 2>/dev/null; then
+    echo "nemo-sync: not started from a stick ($MEDIUM is not mounted); nothing is kept"
+    exit 3
+else
+    FSTYPE="$(findmnt -no FSTYPE "$MEDIUM")"
+fi
+case "$FSTYPE" in
+    vfat|exfat) ;;
+    *) echo "nemo-sync: the boot medium is $FSTYPE, not a writable stick; nothing is kept"
+       exit 3 ;;
+esac
+DATA="$MEDIUM/NemoData"
+# Set by a restore, cleared by every boot (/run is in memory). Until it is
+# there the home folder may simply not have been filled yet, and a save
+# would take everything on the stick for deleted.
+RESTORED="${NEMO_SYNC_STATE:-/run/nemo-sync}/restored-$USER_NAME"
+
+writable() { mount -o remount,rw "$MEDIUM"; }
+readonly_again() { sync; mount -o remount,ro "$MEDIUM" 2>/dev/null || true; }
+
+case "$ACTION" in
+status)
+    if [ -d "$DATA" ]; then
+        echo "nemo-sync: work is kept on the stick, in NemoData ($FSTYPE)"
+    else
+        echo "nemo-sync: the stick can keep work; nothing saved yet"
+    fi
+    ;;
+save)
+    if [ -d "$DATA" ] && [ ! -e "$RESTORED" ]; then
+        echo "nemo-sync: not saving: the work on the stick has not been restored since this boot"
+        exit 4
+    fi
+    writable
+    trap readonly_again EXIT
+    stamp="$(date +%Y-%m-%d_%H%M%S)"
+    for f in $FOLDERS; do
+        [ -d "$HOME_DIR/$f" ] || continue
+        # One that could not be restored is not saved: its home copy is
+        # partial, and the stick's files would be taken for deleted.
+        grep -qxF "$f" "$RESTORED" 2>/dev/null && continue
+        mkdir -p "$DATA/$f"
+        # FAT keeps neither owners, permissions nor links, and its times are
+        # to two seconds; -rt and --modify-window say exactly that. New and
+        # changed files are copied over; nothing is deleted here.
+        rsync -rt --modify-window=2 --no-links "$HOME_DIR/$f/" "$DATA/$f/"
+        # What is on the stick but no longer at home was deleted: move it to
+        # .removed instead of deleting it. (A changed file is not kept: a
+        # copy every two minutes would fill the stick.)
+        rsync -rtn --modify-window=2 --no-links --delete --itemize-changes \
+                "$HOME_DIR/$f/" "$DATA/$f/" |
+            sed -n 's/^\*deleting  *//p' |
+            while IFS= read -r gone; do
+                [ -e "$DATA/$f/$gone" ] || continue
+                case "$gone" in */) continue ;; esac       # folders follow their files
+                mkdir -p "$(dirname "$DATA/.removed/$stamp/$f/$gone")"
+                mv "$DATA/$f/$gone" "$DATA/.removed/$stamp/$f/$gone"
+            done
+        # Folders left empty by those moves.
+        find "$DATA/$f" -mindepth 1 -type d -empty -delete 2>/dev/null || true
+    done
+    # The model's saved reading of each prompt (nemo/slotcache.py). MOVED to
+    # the stick and never restored, so a live session does not hold it in
+    # memory: Nemo reads a file from the stick only when it needs it. Only
+    # files the server finished at least ten seconds ago. A cache, so the
+    # stick keeps the newest SLOTS_MB per model and the rest are deleted,
+    # not moved to .removed.
+    SLOTS="$HOME_DIR/.nemo/slots"
+    if [ -d "$SLOTS" ]; then
+        find "$SLOTS" -mindepth 2 -maxdepth 2 -type f -name '*.bin' ! -newermt '-10 seconds' |
+        while IFS= read -r src; do
+            model="$(basename "$(dirname "$src")")"
+            mkdir -p "$DATA/.nemo/slots/$model"
+            cp "$src" "$DATA/.nemo/slots/$model/" && rm -f "$src"
+        done
+        for d in "$DATA/.nemo/slots"/*/; do
+            [ -d "$d" ] || continue
+            total=0
+            ls -t "$d" | while IFS= read -r n; do
+                case "$n" in *.bin) ;; *) continue ;; esac
+                total=$((total + $(stat -c %s "$d$n")))
+                [ "$total" -le $((${SLOTS_MB:-512} * 1048576)) ] || rm -f "$d$n"
+            done
+        done
+    fi
+    date '+%Y-%m-%d %H:%M:%S' > "$DATA/last-saved.txt"
+    echo "nemo-sync: saved to the stick"
+    ;;
+restore)
+    mkdir -p "$(dirname "$RESTORED")"
+    if [ ! -d "$DATA" ]; then
+        touch "$RESTORED"
+        echo "nemo-sync: nothing on the stick to restore"; exit 0
+    fi
+    skipped=""
+    for f in $FOLDERS; do
+        [ -d "$DATA/$f" ] || continue
+        mkdir -p "$HOME_DIR/$f"
+        # D207: one damaged folder stops only itself. It stopped the whole
+        # restore: the folders after it never came back (the portraits, in
+        # .nemo/art) and, the restore unfinished, nothing was saved.
+        if ! rsync -rt --modify-window=2 "$DATA/$f/" "$HOME_DIR/$f/"; then
+            skipped="$skipped $f"
+            continue
+        fi
+        chown -R "$USER_NAME:" "$HOME_DIR/$f"
+        # FAT keeps no permissions: the Researcher's key is the user's alone.
+        case "$f" in .nemo/keys) chmod 700 "$HOME_DIR/$f"; chmod 600 "$HOME_DIR/$f"/* 2>/dev/null || true ;; esac
+    done
+    printf '%s\n' $skipped > "$RESTORED"
+    if [ -n "$skipped" ]; then
+        echo "nemo-sync: restored from the stick, except:$skipped (damaged; left alone and not saved)"
+    else
+        echo "nemo-sync: restored from the stick"
+    fi
+    ;;
+*)
+    echo "usage: nemo-sync save|restore|status [USER]" >&2
+    exit 2
+    ;;
+esac

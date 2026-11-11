@@ -1,0 +1,110 @@
+#!/bin/sh
+# nemo-bench: does another Linux make Nemo faster on this laptop? (owner,
+# 2026-11-04: "nobara linux and cachyOS for base os if will improve
+# performance for nemoiso"; he chose to measure before anything changes.)
+#
+# The same llama-server binary and the same model on every OS, so the only
+# thing that differs is the OS. Run it FIRST on NemoIso: there it copies
+# /opt/nemo/bin/llama-server beside itself. Then boot the CachyOS and Nobara
+# live sticks on the same laptop and run it again from this folder.
+#
+#   sh nemo-bench [MODEL.gguf]
+#
+# Each run appends three lines to results.csv beside this script: one per
+# repeat of a fixed request (179 prompt tokens read with qwen3-1.7b, 128 written, at
+# temperature 0 with a fixed seed). llama-server's own timings are recorded:
+# prompt tokens read per second and tokens written per second. Also: the OS,
+# kernel, CPU, threads, and memory free before the model is loaded.
+#
+# It changes nothing on the system: no package is installed, nothing is
+# mounted, nothing is written outside this folder. It needs curl, which the
+# CachyOS, Nobara and Debian live images carry.
+set -eu
+
+HERE=$(cd "$(dirname "$0")" && pwd)
+OUT="$HERE/results.csv"
+PORT=8091
+BIN="$HERE/llama-server"
+
+say() { printf '%s\n' "$*"; }
+
+# --- the binary: NemoIso's, the same everywhere --------------------------
+if [ -x /opt/nemo/bin/llama-server ]; then
+    if ! cmp -s /opt/nemo/bin/llama-server "$BIN" 2>/dev/null; then
+        cp /opt/nemo/bin/llama-server "$BIN" && chmod +x "$BIN"
+        say "Copied NemoIso's llama-server here, for the other systems to use."
+    fi
+fi
+if [ ! -x "$BIN" ]; then
+    # A FAT32 stick may not keep the execute bit: run it through a copy.
+    if [ -f "$BIN" ]; then
+        cp "$BIN" /tmp/nemo-bench-llama-server && chmod +x /tmp/nemo-bench-llama-server
+        BIN=/tmp/nemo-bench-llama-server
+    else
+        say "No llama-server here. Run this on NemoIso first: it copies NemoIso's binary"
+        say "into $HERE, so every system is measured with the same one."
+        exit 2
+    fi
+fi
+
+# --- the model -----------------------------------------------------------
+MODEL="${1:-}"
+if [ -z "$MODEL" ]; then
+    for p in /opt/nemo/models/qwen3-1.7b.gguf /mnt/nemo-windows/*/Nemo/models/qwen3-1.7b.gguf \
+             /run/media/*/*/Nemo/models/qwen3-1.7b.gguf /media/*/*/Nemo/models/qwen3-1.7b.gguf \
+             "$HERE/qwen3-1.7b.gguf"; do
+        [ -f "$p" ] && MODEL="$p" && break
+    done
+fi
+if [ -z "$MODEL" ] || [ ! -f "$MODEL" ]; then
+    say "No model found. Give one: sh nemo-bench /path/to/qwen3-1.7b.gguf"
+    say "(Open the Windows disk in the file manager first, so it is mounted: the"
+    say " models are in Nemo/models there.)"
+    exit 2
+fi
+
+# --- what this system is -------------------------------------------------
+OS=$( (. /etc/os-release 2>/dev/null && printf '%s' "${PRETTY_NAME:-unknown}") || echo unknown)
+KERNEL=$(uname -r)
+CPU=$(sed -n 's/^model name[[:space:]]*:[[:space:]]*//p' /proc/cpuinfo | head -n 1)
+THREADS=$(grep -c '^processor' /proc/cpuinfo)
+FREE_MB=$(awk '/^MemAvailable:/ {printf "%d", $2/1024}' /proc/meminfo)
+say "System: $OS, kernel $KERNEL"
+say "CPU: $CPU ($THREADS threads); $FREE_MB MB free before loading"
+say "Model: $MODEL"
+
+# --- run -----------------------------------------------------------------
+LOG=$(mktemp /tmp/nemo-bench.XXXXXX)
+"$BIN" -m "$MODEL" -c 2048 --port "$PORT" -np 1 --cache-ram 0 >"$LOG" 2>&1 &
+PID=$!
+trap 'kill "$PID" 2>/dev/null; rm -f "$LOG"' EXIT
+i=0
+# /health is 503 until the model is loaded; /v1/models answers before that.
+until curl -sf -o /dev/null "http://127.0.0.1:$PORT/health"; do
+    i=$((i + 1))
+    if ! kill -0 "$PID" 2>/dev/null; then
+        say "llama-server stopped while loading:"; tail -n 5 "$LOG"; exit 1
+    fi
+    [ "$i" -gt 600 ] && { say "The model did not load within 5 minutes."; exit 1; }
+    sleep 0.5
+done
+LOADED_MB=$(awk '/^MemAvailable:/ {printf "%d", $2/1024}' /proc/meminfo)
+
+# A fixed request: the same words, temperature 0, fixed seed, 128 tokens.
+TEXT="Nemo plans small electronics projects. A battery-powered weather station uses an ESP32-C3 board, a BME280 temperature, humidity and pressure sensor on I2C, a 0.96 inch SSD1306 OLED display on the same I2C bus, a 1000 mAh lithium polymer cell, a TP4056 charger with protection, and an MT3608 boost converter set to 5 volts. The station wakes every ten minutes, reads the sensor, updates the display, and sleeps. List the parts, say which pins of the board carry the I2C data and clock lines, estimate how long the battery lasts if the board draws 80 mA for two seconds when awake and 0.1 mA asleep, and name one thing that could go wrong with the wiring. Explain each step briefly."
+if [ ! -f "$OUT" ]; then
+    echo "when,os,kernel,cpu,threads,free_mb_before,free_mb_loaded,model,run,prompt_tokens,read_per_s,written_tokens,write_per_s" >"$OUT"
+fi
+for run in 1 2 3; do
+    # cache_prompt false: each run reads the whole prompt, as a fresh step does.
+    REPLY=$(curl -s "http://127.0.0.1:$PORT/completion" -H 'Content-Type: application/json' \
+        -d "{\"prompt\": \"$TEXT\", \"n_predict\": 128, \"temperature\": 0, \"seed\": 7, \"cache_prompt\": false}")
+    get() { printf '%s' "$REPLY" | grep -o "\"$1\":[0-9.]*" | head -n 1 | cut -d: -f2; }
+    r2() { [ -n "$1" ] && awk -v v="$1" 'BEGIN {printf "%.2f", v}' || true; }
+    PN=$(get prompt_n); PS=$(r2 "$(get prompt_per_second)"); WN=$(get predicted_n); WS=$(r2 "$(get predicted_per_second)")
+    say "run $run: read $PN tokens at ${PS:-?}/s, wrote $WN at ${WS:-?}/s"
+    printf '%s,"%s",%s,"%s",%s,%s,%s,%s,%s,%s,%s,%s,%s\n' "$(date -u +%Y-%m-%dT%H:%MZ)" "$OS" "$KERNEL" \
+        "$CPU" "$THREADS" "$FREE_MB" "$LOADED_MB" "$(basename "$MODEL")" "$run" \
+        "${PN:-}" "${PS:-}" "${WN:-}" "${WS:-}" >>"$OUT"
+done
+say "Written to $OUT. Boot the next system and run this again from the same folder."

@@ -1,0 +1,24 @@
+# The Linux scripts are run by sh and bash, which do not forgive a CR.
+install/linux/*      text eol=lf
+install/live-build/* text eol=lf
+
+# Binary test data: never converted.
+*.wav binary
+
+# One line ending per kind of file (2026-10-29): edits made on Windows had
+# saved 31 Python, Markdown and HTML files with CR LF, the rest LF.
+*.py    text eol=lf
+*.md    text eol=lf
+*.html  text eol=lf
+*.toml  text eol=lf
+*.yaml  text eol=lf
+*.json  text eol=lf
+*.txt   text eol=lf
+# Windows' own scripts keep Windows' line ending.
+*.cmd   text eol=crlf
+*.ps1   text eol=crlf
+
+# Claude Code tools for the author (2026-11-08): never in NemoWin or the image.
+/.claude export-ignore
+/CLAUDE.md export-ignore
+/tests/test_claude_hooks.py export-ignore

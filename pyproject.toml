@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "nemo-workshop"
+version = "0.1.0"
+description = "Nemo Workshop: a local, offline creative assistant for modest hardware"
+requires-python = ">=3.11"
+license = { text = "GPL-3.0-or-later" }
+authors = [{ name = "Highjive" }]
+readme = "README.md"
+# cryptography is required: master floors and maintenance documents
+# are ed25519-signed. Debian ships it as python3-cryptography
+# (no compile); Windows has wheels.
+dependencies = ["pyyaml>=6.0", "cryptography>=41", "pypdf>=4.0"]
+
+# Everything else is optional on purpose. On a two-core Sandy Bridge machine
+# a pip install is measured in minutes, so nothing heavy is a hard dependency
+# and every check degrades to SKIP with a message when its tool is absent.
+[project.optional-dependencies]
+# scipy and rtree are optional for trimesh but required here: without
+# them the solid check crashed and the thickness check always skipped.
+cad = ["cadquery>=2.4", "trimesh>=4.0", "numpy>=1.24", "scipy>=1.10", "rtree>=1.0"]
+eda = ["skidl>=1.2", "wireviz>=0.4"]
+fw  = ["platformio>=6.1"]
+science = ["openpyxl==3.1.5", "sympy==1.14.0", "Pint==0.26.2"]
+all = ["cadquery>=2.4", "trimesh>=4.0", "numpy>=1.24", "scipy>=1.10", "rtree>=1.0",
+       "skidl>=1.2", "wireviz>=0.4", "platformio>=6.1"]
+
+[project.scripts]
+nemo = "nemo.cli:main"
+
+# Discovered, not listed. A hand-written list silently omitted nemo.gui from
+# pip installs when the interface was added.
+[tool.setuptools.packages.find]
+include = ["nemo*"]
+
+[tool.setuptools.package-data]
+"nemo.prompts" = ["*.md"]
+"nemo" = ["data/parts/*.yaml", "data/evals/*.jsonl", "data/logo/*.png", "data/logo/*.ico", "data/departments/*.jpg"]

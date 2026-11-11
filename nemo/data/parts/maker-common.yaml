@@ -1,0 +1,581 @@
+# Common parts for general-purpose designs, not tied to one project.
+# Figures taken from datasheets or, where the part is normally bought as a
+# breakout/module rather than a bare IC, from the module maker's own spec
+# sheet -- that is what actually gets wired up, and bare-die figures would
+# understate real draw (a regulator and pull-ups are not free). Each entry
+# says where its numbers came from. If you change a number, say where the
+# new one came from too -- this file is the reason Nemo does not have to
+# guess.
+
+# ------------------------------------------------------------------ power
+# These two exist to unblock battery-powered designs that need more than
+# the 500 mAh cell already in the library, or need 5 V from a LiPo.
+
+lipo_1000:
+  name: 3.7 V 1000 mAh LiPo cell (803040)
+  category: power
+  supply_v: [3.7]
+  current_ma: 1000      # 1C, conservative -- datasheets for this format allow up to 3C
+  peak_ma: 2000
+  size_mm: [40, 30, 8]
+  mount: slot
+  # D150. A cell has two leads. These two names are Nemo's own, not a
+  # manufacturer's marking.
+  pins:
+    - {name: "BAT+", function: power, voltage: 3.7, direction: out}
+    - {name: "BAT-", function: gnd}
+  notes: >
+    3.7 V nominal, 4.2 V charged, 3.0 V cutoff, 803040 format (8 mm thick,
+    30 mm wide, 40 mm long -- the name is the size). Needs a protection
+    circuit if the board does not have one (tp4056_protected covers this).
+    Cells swell with age -- do not design a rigid pocket with zero
+    clearance.
+  datasheet: 803040-format 1000 mAh cell, manufacturer figures (DNK Power,
+    Ufine, and equivalents agree on this format)
+
+lipo_2000:
+  name: 3.7 V 2000 mAh LiPo cell (103450)
+  category: power
+  supply_v: [3.7]
+  current_ma: 2000      # 1C
+  peak_ma: 4000
+  size_mm: [50, 34, 10]
+  mount: slot
+  # D150. A cell has two leads. These two names are Nemo's own, not a
+  # manufacturer's marking.
+  pins:
+    - {name: "BAT+", function: power, voltage: 3.7, direction: out}
+    - {name: "BAT-", function: gnd}
+  notes: >
+    3.7 V nominal, 4.2 V charged, 3.0 V cutoff, 103450 format (10 mm thick,
+    34 mm wide, 50 mm long). Same protection and clearance notes as
+    lipo_1000; this is just a bigger cell in the same family.
+  datasheet: 103450-format 2000 mAh cell, manufacturer figures (CITYORK and
+    equivalents agree on this format)
+
+boost_5v_mt3608:
+  name: MT3608 boost converter (adjustable, set to 5 V)
+  category: power
+  supply_v: [3.7]        # what it takes IN, from a LiPo
+  current_ma: 0
+  peak_ma: 1000          # ST recommends 1 A continuous even though the chip is rated to 2 A
+  output_v: [5.0]
+  efficiency: 0.93
+  size_mm: [17, 11, 4]
+  mount: loose
+  # D150. The module's four pads and its 2-24 V input, as components101's
+  # page for it gives them (components101.com/node/1495, read 2026-10-07).
+  # In this library it is set to 5 V out and fed from one cell.
+  pins:
+    - {name: "VIN+", function: power, voltage: 3.7, direction: in}
+    - {name: "VIN-", function: gnd}
+    - {name: "VOUT+", function: power, voltage: 5.0, direction: out}
+    - {name: "VOUT-", function: gnd}
+  notes: >
+    Steps a LiPo's 3.0-4.2 V up to a fixed 5 V, set once with the onboard
+    potentiometer before connecting anything -- it powers up at whatever
+    voltage it was last adjusted to, not a safe default. Nemo's power
+    suggestions now account for this converter automatically when a design
+    on a LiPo cell has a load that needs 5 V: it is offered as part of the
+    plan, with its efficiency loss reflected in the runtime estimate,
+    rather than needing to be added and budgeted for by hand.
+  datasheet: MT3608 module spec sheet (2 A rated, 1 A continuous
+    recommended, >93% typical efficiency)
+
+# --------------------------------------------------------------- sensors
+
+bme280:
+  name: BME280 temperature/humidity/pressure sensor module
+  category: sensor
+  logic_v: 3.3
+  supply_v: [3.3, 5.0]
+  current_ma: 1          # <1 mA during a measurement, module figure
+  peak_ma: 1
+  size_mm: [15, 13, 3]
+  mount: holes
+  interfaces: [i2c, spi]
+  pins:
+    - {name: VCC, function: power, voltage: 3.3}
+    - {name: GND, function: gnd}
+    - {name: SCL, function: bus}
+    - {name: SDA, function: bus}
+  notes: >
+    Bare IC needs 1.71-3.6 V; breakout modules add a regulator and accept
+    5 V too. Two I2C addresses (0x76/0x77) let two boards share a bus.
+    Idle current is µA-scale -- this is a good part for a battery design.
+  datasheet: Bosch BME280 datasheet rev 1.24; module figure from
+    lastminuteengineers.com module teardown
+
+mpu6050:
+  name: MPU-6050 6-axis IMU module
+  category: sensor
+  logic_v: 3.3
+  supply_v: [3.3, 5.0]
+  current_ma: 4          # 3.9 mA, all 6 axes + DMP active, InvenSense datasheet
+  peak_ma: 4
+  size_mm: [21, 16, 3]
+  mount: holes
+  interfaces: [i2c]
+  pins:
+    - {name: VCC, function: power, voltage: 3.3}
+    - {name: GND, function: gnd}
+    - {name: SCL, function: bus}
+    - {name: SDA, function: bus}
+    - {name: INT, function: io}
+    - {name: AD0, function: io}
+  notes: >
+    Bare chip needs 2.375-3.46 V on VDD; breakout modules add an AP2112K
+    regulator so 5 V is fine too. AD0 sets the I2C address (0x68 or 0x69),
+    useful when a design wants two IMUs on one bus.
+  datasheet: InvenSense MPU-6050 datasheet rev 3.4 (3.9 mA active current)
+
+vl53l0x:
+  name: VL53L0X time-of-flight distance sensor module
+  category: sensor
+  logic_v: 3.3
+  supply_v: [3.3, 5.0]
+  current_ma: 19         # active ranging average, ST datasheet
+  peak_ma: 40             # includes the laser emitter, ST datasheet
+  size_mm: [15, 8, 2]
+  mount: holes
+  interfaces: [i2c]
+  pins:
+    - {name: VIN, function: power, voltage: 3.3}
+    - {name: GND, function: gnd}
+    - {name: SCL, function: bus}
+    - {name: SDA, function: bus}
+    # Adafruit's guide to its VL53L0X breakout (Pinouts, read 2026-10-07):
+    # the shutdown pin "By default it's pulled high", and the other "is used
+    # by the sensor to indicate that data is ready". Optional for that
+    # reason. Not verified for other makers' modules.
+    - {name: XSHUT, function: io, optional: true}
+    - {name: GPIO1, function: io, optional: true}
+  notes: >
+    Bare part runs at 2.6-3.5 V; common breakout modules (Adafruit and
+    equivalents) add a regulator for 3.3-5.5 V input. 30 mm to 2 m range,
+    25 degree field of view. XSHUT lets several units share an I2C bus by
+    bringing each up one at a time to reassign its address.
+  datasheet: ST VL53L0X datasheet DocID029104 (peak current including
+    VCSEL, p.23-24)
+
+ds18b20:
+  name: DS18B20 1-Wire digital thermometer
+  footprint: "Package_TO_SOT_THT:TO-92_Inline"
+  footprint_source: "KiCad 10 Sensor_Temperature:DS18B20 symbol (from MAX31820: GND 1, DQ 2, VDD 3) on its TO-92 footprint. One source: analog.com refused the datasheet download, 2026-11-04. The waterproof probe version is wired by its leads, not this footprint."
+  pads: {"VDD": "3", "GND": "1", "DQ": "2"}
+  category: sensor
+  logic_v: 3.3
+  supply_v: [3.0, 5.0]
+  current_ma: 1.5         # active conversion, Maxim/Analog Devices datasheet
+  peak_ma: 1.5
+  size_mm: [5, 5, 20]      # TO-92 body
+  mount: loose
+  interfaces: [onewire]
+  pins:
+    - {name: VDD, function: power, voltage: 3.3}
+    - {name: GND, function: gnd}
+    - {name: DQ, function: bus}
+  notes: >
+    3.0-5.5 V external supply, or "parasite power" straight off the data
+    line with VDD tied to ground -- fine for one sensor, unreliable for
+    several. Needs a 4.7 kOhm pull-up on DQ. -55 to +125 C range,
+    waterproof probe versions are common for anything that gets wet.
+  datasheet: Analog Devices/Maxim DS18B20 datasheet (1.5 mA during
+    conversion or EEPROM write)
+
+# --------------------------------------------------------------- display
+
+ssd1306_oled_096:
+  name: SSD1306 0.96" 128x64 OLED display module
+  category: display
+  logic_v: 3.3
+  supply_v: [3.3, 5.0]
+  current_ma: 20          # module figure, varies with lit pixels
+  peak_ma: 20
+  size_mm: [30, 30, 5]
+  mount: holes
+  interfaces: [i2c, spi]
+  pins:
+    - {name: VCC, function: power, voltage: 3.3}
+    - {name: GND, function: gnd}
+    - {name: SCL, function: bus}
+    - {name: SDA, function: bus}
+  notes: >
+    No backlight needed -- each pixel is its own OLED, so current scales
+    with how much of the screen is lit; ~20 mA is a full-screen figure.
+    I2C address is 0x3C on most boards. SPI variants exist with the same
+    panel but four more pins (DC, RES, CS).
+  datasheet: Solomon Systech SSD1306 controller; module current from
+    Soldered and multiple module vendors' own spec sheets (~20 mA typical)
+
+# --------------------------------------------------------------- driver
+
+drv8833:
+  name: DRV8833 dual H-bridge motor driver breakout
+  category: driver
+  logic_v: 3.3
+  supply_v: [2.7, 5.0, 6.0, 9.0]
+  current_ma: 200          # placeholder: depends entirely on the motor. See notes.
+  peak_ma: 1200            # per channel, continuous rating -- edit to your motor's stall current
+  size_mm: [24, 18, 3]
+  mount: holes
+  interfaces: [gpio]
+  pins:
+    - {name: VM, function: power}
+    - {name: GND, function: gnd}
+    - {name: AIN1, function: io, direction: in}
+    - {name: AIN2, function: io, direction: in}
+    - {name: BIN1, function: io, direction: in}
+    - {name: BIN2, function: io, direction: in}
+    - {name: SLP, function: io}
+  notes: >
+    IMPORTANT -- current_ma/peak_ma above are NOT the driver's own draw,
+    which is negligible; they stand in for whatever motor you attach,
+    because that current comes from the same supply rail. 1200 mA is the
+    chip's per-channel continuous rating (2 A peak for a few seconds), not
+    a real motor's draw. Edit these two figures to your actual motor's
+    typical and stall current before trusting the parts-step power check.
+    Logic inputs are 3 V and 5 V compatible; motor supply is separate from
+    logic and can run 2.7-10.8 V.
+  datasheet: TI DRV8833 datasheet rev E (1.5 A RMS max); breakout ratings
+    from Adafruit and Pololu carrier board specs (1.2 A continuous, 2 A
+    peak per channel)
+
+# -------------------------------------------------------------- actuator
+
+ws2812b_ring8:
+  name: WS2812B 8-pixel addressable RGB ring
+  category: actuator
+  logic_v: 5.0
+  supply_v: [5.0]
+  current_ma: 160          # 8 x ~20 mA typical for animation, not full white
+  peak_ma: 480              # 8 x 60 mA, all pixels full white -- Adafruit's planning figure
+  size_mm: [27, 27, 3]
+  mount: holes
+  interfaces: [onewire]
+  pins:
+    - {name: "5V", function: power, voltage: 5.0}
+    - {name: GND, function: gnd}
+    - {name: DIN, function: io, direction: in}
+    - {name: DOUT, function: io, direction: out}
+  notes: >
+    Data line wants to see at least 70% of the supply voltage, so 3.5 V on
+    a 5 V ring -- a 3.3 V logic pin (ESP32, RP2040) sits below that and may
+    need a level shifter on longer runs, though many ESP32 boards drive
+    short runs of a few pixels reliably without one. Size any external
+    power supply toward the peak figure, not the typical one. Single-LED
+    failure on this chip usually takes out only that one pixel.
+  datasheet: WS2812B datasheet; per-LED current is Adafruit's widely-used
+    planning figure (60 mA max, ~20 mA typical for animation), since the
+    chip datasheet is reported not to state a per-channel output current (one secondary source; not checked against the primary datasheet)
+
+sg90_servo:
+  name: SG90 9 g micro servo
+  category: actuator
+  logic_v: 5.0
+  supply_v: [4.8, 5.0, 6.0]
+  current_ma: 150           # moving, typical
+  peak_ma: 500               # stall -- gears can strip at this current, not just draw it
+  size_mm: [22, 12, 31]
+  mount: holes
+  interfaces: [pwm]
+  pins:
+    - {name: VCC, function: power, voltage: 5.0}
+    - {name: GND, function: gnd}
+    - {name: PWM, function: io}
+  notes: >
+    ~10 mA idle, 100-250 mA while moving, up to 500 mA if it stalls against
+    a mechanical limit -- which also strips the nylon gears, so avoid
+    driving it into a hard stop. 1.8 kgf-cm torque at 4.8 V. Draws more
+    than most microcontroller 5 V pins can safely supply if you run more
+    than one; power servos from the main supply, not the board's regulator.
+  datasheet: TowerPro SG90 datasheet (stall torque, operating voltage);
+    current figures from independent bench measurements cited by
+    ProtoSupplies and auselectronicsdirect, since TowerPro's own sheet does
+    not state current draw
+
+relay_5v_1ch:
+  name: 5 V single-channel relay module
+  category: actuator
+  logic_v: 5.0
+  supply_v: [5.0]
+  current_ma: 90            # coil + status LED, typical
+  peak_ma: 190               # SunFounder's own module spec, coil energised
+  size_mm: [43, 17, 17]
+  mount: holes
+  interfaces: [gpio]
+  pins:
+    - {name: VCC, function: power, voltage: 5.0}
+    - {name: GND, function: gnd}
+    - {name: IN, function: io, voltage: 3.3, direction: in}
+    - {name: "NO", function: contact}   # quoted: bare NO is YAML for False
+    - {name: "NC", function: contact}
+    - {name: COM, function: contact}
+  notes: >
+    IN accepts 2.5-5 V so 3.3 V logic can trigger it directly. The coil
+    side (VCC/GND/IN) is what draws from your supply; the switched side
+    (NO/NC/COM) can carry up to 10 A at 250 VAC/30 VDC but is electrically
+    isolated and NOT part of the design's own power budget. If the
+    switched side is used for mains voltage, remember mains work is
+    outside what Nemo's safety floor allows without a human sign-off, and
+    the enclosure needs creepage clearance a hobby enclosure design does
+    not normally provide -- treat mains switching as a job for a rated
+    enclosure and a qualified person, not this pipeline.
+  datasheet: SunFounder 1-channel 5V relay module spec sheet (190 mA max,
+    5 mA trigger current); contact ratings from the same and
+    components101.com's teardown of a typical module
+
+# ---------------------------------------------------------------- boards
+
+rp2040_pico:
+  name: Raspberry Pi Pico (RP2040)
+  footprint: "Module:RaspberryPi_Pico_Common_THT"
+  footprint_source: "KiCad 10 MCU_Module:RaspberryPi_Pico symbol (pad = the Pico's physical pin; the footprint cites the Raspberry Pi Pico datasheet). One source: the datasheet itself (over 10 MB) could not be fetched to cross-check, 2026-11-04."
+  pads: {"3V3": "36", "VBUS": "40", "GND": "3", "GPIO2": "4", "GPIO3": "5", "GPIO4": "6", "GPIO5": "7", "GPIO6": "9", "GPIO7": "10", "GPIO8": "11", "GPIO9": "12", "GPIO10": "14", "GPIO11": "15", "GPIO12": "16", "GPIO13": "17", "GPIO14": "19", "GPIO15": "20", "GPIO16": "21", "GPIO17": "22", "GPIO18": "24", "GPIO19": "25", "GPIO20": "26", "GPIO21": "27", "GPIO22": "29", "GPIO26": "31", "GPIO27": "32", "GPIO28": "34"}
+  category: mcu
+  logic_v: 3.3
+  supply_v: [5.0, 3.3]
+  current_ma: 30            # typical active, Raspberry Pi's own measurements
+  peak_ma: 100                # heaviest workload Raspberry Pi measured, rounded up
+  size_mm: [51, 21, 4]
+  mount: holes
+  interfaces: [spi, i2c, uart, pwm]
+  # D163. The header's pins, read 2026-10-07:
+  #   Raspberry Pi's documentation (Pico series): "26 GPIO pins with
+  #   overlapping functions", "3V3(OUT) at pin 36 (3.3 V regulated output)",
+  #   "VBUS at pin 40 (5 V input from USB)", and four more I/O pins "used
+  #   for internal functions", of which it names GP25, the LED.
+  #   Which 26: pico.pinout.xyz, a third party's drawing of the header:
+  #   GP0 to GP22 and GP26 to GP28. Raspberry Pi's own datasheet was too
+  #   large to fetch and was not read.
+  # Left out here though they are on the header: GPIO0 and GPIO1, as a
+  # caution only (a serial console is commonly put there; no source read
+  # for this says so). VSYS is not listed: it is an input.
+  # Written GPIOn, the one spelling the firmware step reads (D144); the
+  # board's own silkscreen says GPn.
+  pins:
+    - {name: 3V3, function: power, voltage: 3.3}
+    - {name: VBUS, function: power, voltage: 5.0}
+    - {name: GND, function: gnd}
+    - {name: GPIO2, function: io, voltage: 3.3}
+    - {name: GPIO3, function: io, voltage: 3.3}
+    - {name: GPIO4, function: io, voltage: 3.3}
+    - {name: GPIO5, function: io, voltage: 3.3}
+    - {name: GPIO6, function: io, voltage: 3.3}
+    - {name: GPIO7, function: io, voltage: 3.3}
+    - {name: GPIO8, function: io, voltage: 3.3}
+    - {name: GPIO9, function: io, voltage: 3.3}
+    - {name: GPIO10, function: io, voltage: 3.3}
+    - {name: GPIO11, function: io, voltage: 3.3}
+    - {name: GPIO12, function: io, voltage: 3.3}
+    - {name: GPIO13, function: io, voltage: 3.3}
+    - {name: GPIO14, function: io, voltage: 3.3}
+    - {name: GPIO15, function: io, voltage: 3.3}
+    - {name: GPIO16, function: io, voltage: 3.3}
+    - {name: GPIO17, function: io, voltage: 3.3}
+    - {name: GPIO18, function: io, voltage: 3.3}
+    - {name: GPIO19, function: io, voltage: 3.3}
+    - {name: GPIO20, function: io, voltage: 3.3}
+    - {name: GPIO21, function: io, voltage: 3.3}
+    - {name: GPIO22, function: io, voltage: 3.3}
+    - {name: GPIO26, function: io, voltage: 3.3}
+    - {name: GPIO27, function: io, voltage: 3.3}
+    - {name: GPIO28, function: io, voltage: 3.3}
+  notes: >
+    No wireless radio -- if you need WiFi or Bluetooth use rp2040_pico (this
+    entry) only for wired designs, or add a Pico W as a separate part when
+    needed. VSYS accepts 1.8-5.5 V, so it runs well from a single-cell
+    LiPo without a regulator in between (double-check against your other
+    3.3 V parts' actual logic tolerance). Onboard buck-boost regulates
+    3.3V for the chip and for external circuitry, recommended under 300 mA.
+  datasheet: Raspberry Pi Pico datasheet; current figures from Raspberry
+    Pi's own published power consumption tests (idle ~20 mA, heaviest
+    tested workload ~90 mA)
+
+esp32c3_devkit:
+  name: ESP32-C3 DevKit (RISC-V, WiFi + BLE)
+  footprint: "RF_Module:ESP32-C3-DevKitM-1"
+  footprint_source: "KiCad 10 RF_Module:ESP32-C3-DevKitM-1 symbol and footprint, agreeing with Espressif's ESP32-C3-DevKitM-1 user guide J1/J3 header tables (docs.espressif.com, read 2026-11-04). The DevKitM-1 is the board Nemo builds for (PlatformIO esp32-c3-devkitm-1)."
+  pads: {"3V3": "2", "5V": "13", "GND": "1", "GPIO0": "9", "GPIO1": "10", "GPIO3": "5", "GPIO4": "20", "GPIO5": "21", "GPIO6": "22", "GPIO7": "23", "GPIO10": "11"}
+  category: mcu
+  logic_v: 3.3
+  supply_v: [5.0, 3.3]
+  current_ma: 90            # active, receiving -- comparable module datasheet figure
+  peak_ma: 350                # WiFi transmit, comparable module datasheet figure
+  size_mm: [52, 18, 11]
+  mount: holes
+  interfaces: [spi, i2c, uart, ble]
+  # D163. Only the pins Espressif's own GPIO summary for the ESP32-C3 lists
+  # with no caveat but "RTC" (ESP-IDF Programming Guide v6.1, Peripherals >
+  # GPIO & RTC GPIO, read 2026-10-07). Left out, and why, from that table:
+  #   2, 8, 9   strapping pins
+  #   12-17     "usually used for SPI flash and are not recommended for
+  #             other uses"
+  #   18, 19    USB-JTAG
+  # Left out as a caution only, the table giving no caveat: 11 (commonly
+  # the flash supply on these modules) and 20 and 21 (commonly the serial
+  # console). No source read for this entry says either.
+  # Not verified: that each of these eight is on a given board's header,
+  # or that the board's 5 V pin is labelled 5V. "ESP32-C3 DevKit" is
+  # several boards.
+  pins:
+    - {name: 3V3, function: power, voltage: 3.3}
+    - {name: 5V, function: power, voltage: 5.0}
+    - {name: GND, function: gnd}
+    - {name: GPIO0, function: io, voltage: 3.3}
+    - {name: GPIO1, function: io, voltage: 3.3}
+    - {name: GPIO3, function: io, voltage: 3.3}
+    - {name: GPIO4, function: io, voltage: 3.3}
+    - {name: GPIO5, function: io, voltage: 3.3}
+    - {name: GPIO6, function: io, voltage: 3.3}
+    - {name: GPIO7, function: io, voltage: 3.3}
+    - {name: GPIO10, function: io, voltage: 3.3}
+  notes: >
+    Smaller and cheaper than the ESP32-S3 boards already in this library,
+    at the cost of no PSRAM and only one core -- fine for simple sensor or
+    switch projects, tight for anything doing on-device inference or a
+    lot of buffering. Single USB-C or micro-USB port for power and
+    programming; onboard LDO accepts 5 V.
+  datasheet: Espressif ESP32-C3 series datasheet (100% duty cycle TX
+    figures are a worst case); typical devkit current from RF Solutions'
+    ESP32-C3-13U module datasheet (93 mA receive, 350 mA transmit)
+
+esp32s3_devkitc_1:
+  name: ESP32-S3-DevKitC-1 (USB OTG + BLE)
+  category: mcu
+  logic_v: 3.3
+  supply_v: [5.0, 3.3]
+  current_ma: 100           # ESTIMATE, as the C3 entry: no board figure read
+  peak_ma: 350              # ESTIMATE: WiFi transmit, comparable module figure
+  size_mm: [70, 26, 10]     # ESTIMATE: Espressif's dimensions drawing not read (its link 404'd); measure the board
+  mount: holes
+  interfaces: [spi, i2c, uart, ble, usb_host]
+  # Owner, 2026-10-29: one board for the wireless dock (reads a USB device as
+  # host, sends to the PC by BLE). Header pins from Espressif's
+  # ESP32-S3-DevKitC-1 v1.1 user guide, J1 and J3 (read 2026-10-29), kept
+  # where ESP-IDF's ESP32-S3 GPIO summary gives no comment. Left out:
+  #   19, 20    as io: they are USB D-/D+ (J3 19, 20; USB-JTAG by default),
+  #             listed below as usb_dm/usb_dp: wired by code to a USB socket,
+  #             never offered to the model
+  #   35-37     octal PSRAM on R8 modules (ESP-IDF: "not recommended")
+  #   43, 44    U0TXD/U0RXD, the serial console
+  #   38        the board's RGB LED
+  #   39-42     JTAG (MTCK/MTDO/MTDI/MTMS)
+  # Left out as a caution: 0, 3, 45, 46, the ESP32-S3 strapping pins as
+  # commonly given; the GPIO page points to the datasheet, NOT read here.
+  # Not verified: whether the board's USB OTG port gives 5 V to a device; the
+  # guide says nothing of VBUS. The socket's VBUS comes from the 5 V rail.
+  pins:
+    - {name: 3V3, function: power, voltage: 3.3}
+    - {name: 5V, function: power, voltage: 5.0}
+    - {name: GND, function: gnd}
+    - {name: GPIO1, function: io, voltage: 3.3}
+    - {name: GPIO2, function: io, voltage: 3.3}
+    - {name: GPIO4, function: io, voltage: 3.3}
+    - {name: GPIO5, function: io, voltage: 3.3}
+    - {name: GPIO6, function: io, voltage: 3.3}
+    - {name: GPIO7, function: io, voltage: 3.3}
+    - {name: GPIO8, function: io, voltage: 3.3}
+    - {name: GPIO9, function: io, voltage: 3.3}
+    - {name: GPIO10, function: io, voltage: 3.3}
+    - {name: GPIO11, function: io, voltage: 3.3}
+    - {name: GPIO12, function: io, voltage: 3.3}
+    - {name: GPIO13, function: io, voltage: 3.3}
+    - {name: GPIO14, function: io, voltage: 3.3}
+    - {name: GPIO15, function: io, voltage: 3.3}
+    - {name: GPIO16, function: io, voltage: 3.3}
+    - {name: GPIO17, function: io, voltage: 3.3}
+    - {name: GPIO18, function: io, voltage: 3.3}
+    - {name: GPIO21, function: io, voltage: 3.3}
+    - {name: GPIO47, function: io, voltage: 3.3}
+    - {name: GPIO48, function: io, voltage: 3.3}
+    - {name: GPIO19, function: usb_dm, voltage: 3.3}
+    - {name: GPIO20, function: usb_dp, voltage: 3.3}
+  notes: >
+    ESP32-S3 with a full-speed USB OTG port (USB 1.1) on GPIO19/20 and BLE:
+    it can read a USB device as host and be a Bluetooth HID to a PC on one
+    chip. Two ports: USB-to-UART (flashing) and the native USB.
+  datasheet: Espressif ESP32-S3-DevKitC-1 v1.1 user guide (header tables J1,
+    J3; USB port "full-speed USB OTG interface, compliant with the USB 1.1
+    specification"); ESP-IDF ESP32-S3 GPIO summary. Currents and size are
+    estimates.
+
+usb_a_socket:
+  name: USB-A socket (for a USB device to plug into)
+  category: connector
+  logic_v: 3.3
+  supply_v: [5.0]
+  current_ma: 0             # the socket draws nothing; the device goes under extra_loads
+  peak_ma: 0
+  size_mm: [18, 14, 8]      # ESTIMATE for a panel-mount breakout; measure the one bought
+  mount: panel
+  interfaces: [usb]
+  # Owner, 2026-10-29 (the wireless dock). The four USB-A contacts by their
+  # USB 2.0 names: VBUS, D-, D+, GND. D-/D+ are wired by code to a board's
+  # usb_dm/usb_dp pins (harness.wire_usb); VBUS and GND as supply pins.
+  # Pin numbers on a given breakout NOT verified: wire by the printed names.
+  pins:
+    - {name: VBUS, function: power, voltage: 5.0}
+    - {name: D-, function: usb_dm, voltage: 3.3}
+    - {name: D+, function: usb_dp, voltage: 3.3}
+    - {name: GND, function: gnd}
+  notes: >
+    A USB 2.0 port gives a device up to 500 mA (the USB 2.0 limit for a
+    configured device); put the device's own figure under extra_loads.
+  datasheet: USB 2.0 specification contact names (VBUS, D-, D+, GND); size an
+    estimate, no one product's drawing read.
+
+# ------------------------------------------------------- level shifting
+
+sn74ahct125:
+  name: SN74AHCT125 quad buffer (3.3 V to 5 V level shifter)
+  footprint: "Package_DIP:DIP-14_W7.62mm"
+  footprint_source: "TI SCLS264R (revised February 2024) Table 4-1, pins of the D, N and other 14-pin packages. DIP-14 (TI's N package) is NEMO'S CHOICE, for hand soldering; SOIC-14 has the same pins."
+  pads: {"1OE": "1", "1A": "2", "1Y": "3", "2OE": "4", "2A": "5", "2Y": "6", "GND": "7", "3Y": "8", "3A": "9", "3OE": "10", "4Y": "11", "4A": "12", "4OE": "13", "VCC": "14"}
+  category: logic
+  # D148. Everything here is from TI's datasheet SCLS264R (December 1995,
+  # revised February 2024), fetched and read 2026-10-06:
+  #   Table 4-1, pin functions, 14-pin D/DB/DGV/N/NS/PW packages
+  #   5.2 Recommended operating conditions: VCC 4.5 to 5.5 V; VIH min 2 V;
+  #       VIL max 0.8 V; VI 0 to 5.5 V; IOH -8 mA, IOL 8 mA
+  #   5.4 Electrical characteristics: ICC max 20 uA at IO = 0
+  #   Description: "When OE is low, the respective gate passes the data
+  #       from the A input to its Y output."
+  #   5.2 note 1: "All unused inputs of the device must be held at VCC or
+  #       GND to ensure proper device operation."
+  # An input reads anything from 2 V up as high, so a 3.3 V pin drives it,
+  # and the output swings to the 5 V supply. One way only: A to Y.
+  # Not from the datasheet, and so not given: a size. It is a bare chip and
+  # needs a carrier or stripboard; the enclosure step draws nothing for it.
+  logic_v: 5.0
+  supply_v: [5.0]
+  current_ma: 1
+  peak_ma: 32            # four outputs at the 8 mA the datasheet recommends as the most
+  size_mm: []
+  mount: loose
+  interfaces: [gpio]
+  pins:
+    - {name: "1OE", function: io, voltage: 3.3, tolerates: 5.5, direction: in}
+    - {name: "1A", function: io, voltage: 3.3, tolerates: 5.5, direction: in}
+    - {name: "1Y", function: io, voltage: 5.0, direction: out}
+    - {name: "2OE", function: io, voltage: 3.3, tolerates: 5.5, direction: in}
+    - {name: "2A", function: io, voltage: 3.3, tolerates: 5.5, direction: in}
+    - {name: "2Y", function: io, voltage: 5.0, direction: out}
+    - {name: GND, function: gnd}
+    - {name: "3Y", function: io, voltage: 5.0, direction: out}
+    - {name: "3A", function: io, voltage: 3.3, tolerates: 5.5, direction: in}
+    - {name: "3OE", function: io, voltage: 3.3, tolerates: 5.5, direction: in}
+    - {name: "4Y", function: io, voltage: 5.0, direction: out}
+    - {name: "4A", function: io, voltage: 3.3, tolerates: 5.5, direction: in}
+    - {name: "4OE", function: io, voltage: 3.3, tolerates: 5.5, direction: in}
+    - {name: VCC, function: power, voltage: 5.0}
+  gates:
+    - {in: "1A", out: "1Y", enable_low: "1OE"}
+    - {in: "2A", out: "2Y", enable_low: "2OE"}
+    - {in: "3A", out: "3Y", enable_low: "3OE"}
+    - {in: "4A", out: "4Y", enable_low: "4OE"}
+  notes: >
+    Raises a 3.3 V signal to 5 V, one way only (A in, Y out). Not for a
+    line that talks both ways, such as I2C. Unused inputs must not float:
+    Nemo ties them to ground.
+  datasheet: "Texas Instruments SN54AHCT125, SN74AHCT125, SCLS264R, revised February 2024"

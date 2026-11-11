@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.egg-info/
+/KiCad/
+
+# The release check's record of the last full suite (per machine).
+/.claude/last-suite.json
