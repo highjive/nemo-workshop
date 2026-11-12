@@ -22,6 +22,30 @@ Nemo is organised as departments, each with its own staff:
 
 Nemo is about helping people make things. It never sends your work anywhere.
 
+## What it looks like
+
+One project, a desk weather display (ESP32-C3, BME280 sensor, 0.96" OLED), as
+Nemo made it. The pictures are from the desktop test machine.
+
+The brief: what the project is, its power, its size and its parts.
+
+![The Workshop's Brief tab for a desk weather display](docs/images/gui-brief.png)
+
+The eight steps, each checked by code before the next one starts.
+
+![The Build tab: all eight steps of the desk weather display passed](docs/images/gui-build.png)
+
+The wiring harness Nemo drew. Code wires the power and ground; the model only
+chose which signal pin goes where, and code checked it.
+
+![Wiring harness: ESP32-C3 to BME280 and SSD1306 over one I2C bus](docs/images/wiring-harness.png)
+
+One of the two enclosure concepts it drew for the owner to choose from.
+
+<img src="docs/images/enclosure-concept.png" alt="Enclosure concept A, an open-topped box with mounts for the parts" width="300">
+
+None of this has been built and flashed on a real board yet: see below.
+
 ## Status: a test release
 
 This is the first public test release, from one developer, **Highjive**. It has
