@@ -118,3 +118,21 @@ The boat, an asteroid dodger, a caterpillar, a brick breaker, a maze; three trie
 - The GDScript benchmark found (flockbay/godot-llm-bench, MIT: 15 Godot 4 tasks judged
   headless on 4.7.2) drives only Claude Code or Codex; Nemo would need its own runner.
 - Nothing about the AH531 or NemoIso.
+
+## LFM2.5-1.2B-Instruct (2026-11-18): not adopted
+
+For the laptop's lite profile, from a Hacker News mention. `LFM2.5-1.2B-Instruct-Q4_K_M.gguf` (730,895,168 bytes,
+sha256 b1b3de11...19b4f5, matching Hugging Face) from LiquidAI/LFM2.5-1.2B-Instruct-GGUF, under the LFM Open License
+v1.0 (free, including commercial use, below $10M a year in revenue). Nemo's llama.cpp b11175 knows its type (`lfm2`).
+
+Run in a trial home on the desktop's GPU, with `nemo eval --base q17 --candidate lfm25` (Nemo's 48 tasks, temperature 0):
+qwen3-1.7b 43/48, LFM2.5 37/48, **DON'T SHIP**.
+- supply: 2/8 against 8/8. Asked which power pin gives 3.3 V or 5 V, it named a signal pin (GPIO18, GPIO0, GPIO2...).
+- pins: 15/16. It said GPIO20 was not on a list that held it.
+- power: 5/6 each. It added 1.5 + 0.6 + 19 to 20.1.
+- runtime: 1/4 against 0/4, three of each cut off at 256 tokens.
+- constraint, json, voltage: the same.
+
+It was faster: 9.7 s for all 48 against 14.3 s. It is also smaller: 731 MB against 1.1 GB. Its speed on the AH531
+was not measured, since it failed on quality first. Evidence: trial-home/evals/948fffdc59764aa4.json.
+The model file was deleted the same day, at the owner's word.

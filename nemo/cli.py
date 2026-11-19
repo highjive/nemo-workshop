@@ -1114,9 +1114,51 @@ def cmd_queue(args, cfg: Config) -> int:
     return 0
 
 
+def _relief(args, cfg: Config) -> int:
+    """nemo model relief <picture> [name=..] [width=mm] [depth=mm] [base=mm] [pitch=mm]
+    [mode=relief|lithophane]: a printable panel raised from a picture (nemo/relief.py)."""
+    from . import relief
+    from .checks import FAIL
+    if not args.spec:
+        print("Which picture? nemo model relief <picture> (from the pictures shelf, or a path)")
+        return 2
+    opts = dict(c.split("=", 1) for c in args.choices if "=" in c)
+    unknown = sorted(set(opts) - {"name", "width", "depth", "base", "pitch", "mode"})
+    if unknown:
+        print(f"Not known: {', '.join(unknown)}. Choose from name, width, depth, base, pitch, mode.")
+        return 2
+    try:
+        nums = {k: float(opts[k]) for k in ("width", "depth", "base", "pitch") if k in opts}
+    except ValueError:
+        print("width, depth, base and pitch are numbers of mm.")
+        return 2
+    mode = opts.get("mode", "relief")
+    name = opts.get("name") or f"{Path(args.spec).stem.replace('-', ' ').replace('_', ' ').title()} "                               f"{'Lithophane' if mode == 'lithophane' else 'Relief'}"
+    try:
+        out, results = relief.make(cfg, name, args.spec, mode=mode,
+                                   width_mm=nums.get("width", relief.WIDTH_MM),
+                                   depth_mm=nums.get("depth", relief.DEPTH_MM),
+                                   base_mm=nums.get("base", relief.BASE_MM),
+                                   pitch_mm=nums.get("pitch", relief.PITCH_MM),
+                                   say=lambda m: print(m, flush=True))
+    except relief.ReliefError as exc:
+        print(f"Art Studio: not made: {exc}.")
+        return 1
+    for r in results:
+        print(f"Editor: {r.status:<4} {r.name}: {r.detail}")
+    ok = all(r.status != FAIL for r in results)
+    print(f"{name}: {'passed' if ok else 'did NOT pass'} the Editor. It is in {out}; the Print "
+          f"Shop can slice it ('slice {out.name}').")
+    if ok:
+        _send_finished(cfg, "art_studio", out)
+    return 0 if ok else 1
+
+
 def cmd_model(args, cfg: Config) -> int:
     """The Art Studio: 3D printable models from a kit of shapes (nemo/modelkit.py)."""
     from . import modelkit
+    if args.action == "relief":
+        return _relief(args, cfg)
     if args.action == "shapes":
         for k, keys in modelkit.SHAPES.items():
             print(f"{k:<12} {', '.join(keys)}, at [x, y, z], rotate [rx, ry, rz], op add|cut")
@@ -1334,6 +1376,8 @@ def cmd_music(args, cfg: Config) -> int:
     from . import cast, music, storeroom
     storeroom.make_shelves(cfg.path("paths.storeroom"))
     found = music.tracks(cfg)
+    if args.action in ("mix", "master"):
+        return _mix_or_master(args, cfg, found)
     if args.action == "list":
         for t in found:
             print(f"{t.artist or '-':<24} {t.album or '-':<24} {t.title}")
@@ -1637,10 +1681,74 @@ def cmd_home(args, cfg: Config) -> int:
         return 1
 
 
+def _track_path(found, name: str) -> Path | None:
+    """A file given by path, else one track on the music shelf by that name."""
+    from . import music
+    p = Path(name).expanduser()
+    if p.is_file():
+        return p
+    hits = music.find(found, name)
+    return hits[0].path if len(hits) == 1 else None
+
+
+def _mix_or_master(args, cfg, found) -> int:
+    """The Mix Engineer and the Mastering Engineer (nemo/mixing.py)."""
+    from . import crafts, mixing
+    try:
+        if args.action == "master":
+            if len(args.names) != 2:
+                print("Mastering Engineer: nemo music master <track> <reference>: the reference "
+                      "is a finished song whose sound you want; Nemo never fetches one.")
+                return 1
+            track, ref = (_track_path(found, n) for n in args.names)
+            for n, got in zip(args.names, (track, ref)):
+                if got is None:
+                    print(f"Mastering Engineer: no single file or track called {n!r}.")
+                    return 1
+            out = mixing.master(cfg, track, ref)
+            print(f"Mastering Engineer: {out}")
+            return 0
+        words, said = mixing.changes(args.names)
+        if len(words) < 2:
+            print("Mix Engineer: nemo music mix <name> <stem> <stem>... [stem=+dB[,left|right"
+                  "|-1..1]]: a name for the mix, then its stems (files, a folder of them, or "
+                  "a folder in the music shelf's stems/).")
+            return 1
+        stems = []
+        from . import music
+        for w in words[1:]:
+            p = Path(w).expanduser()
+            if not p.is_dir() and (music.shelf(cfg) / music.STEMS / w).is_dir():
+                p = music.shelf(cfg) / music.STEMS / w       # the shelf's stems/<name>
+            if p.is_dir():
+                stems += sorted(f for f in p.iterdir() if f.suffix.lower() in mixing.AUDIO)
+            else:
+                got = _track_path(found, w)
+                if got is None:
+                    print(f"Mix Engineer: no single file or track called {w!r}.")
+                    return 1
+                stems.append(got)
+        m = mixing.mix(cfg, words[0], stems, said)
+    except (mixing.MixError, crafts.CraftError, OSError) as exc:
+        print(f"Music Room: {exc}.")
+        return 1
+    for s in m.stems:
+        print(f"  {s.name:<24} measured {s.rms_db:6.1f} dBFS -> volume {s.gain_db - m.trimmed_db:+.1f} dB"
+              + (f", pan {s.pan:+g}" if s.pan else ""))
+    for n in m.notes:
+        print(n)
+    print(f"Mix: {m.out} ({m.lufs:.1f} LUFS, peak {m.peak_db:.1f} dBFS)" if m.lufs is not None
+          else f"Mix: {m.out}")
+    print(f"Session: {m.session}")
+    return 0
+
+
 def cmd_film(args, cfg: Config) -> int:
     """The Film Studio: films from stories, clips joined, slideshows."""
     from . import filmstudio as F
     from . import music, theatre
+    if args.action in ("edit", "animate"):
+        return _film_crafts(args, cfg)
     try:
         if args.action == "list":
             for d in F.stories(cfg):
@@ -1690,6 +1798,52 @@ def cmd_film(args, cfg: Config) -> int:
         print(n)
     print(f"Film: {made.film}" + (f"\nSubtitles: {made.subtitles}" if made.subtitles else ""))
     print("The Theatre lists it with the videos.")
+    return 0
+
+
+def _film_crafts(args, cfg) -> int:
+    """The Finishing Editor (FilmCraft) and the Animator (OpenToonz); nemo/crafts.py."""
+    from . import crafts
+    try:
+        if args.action == "edit":
+            if not args.name:
+                return _which("film", "nemo film edit <film>", "`nemo film list`")
+            crafts.hand_edit(cfg, args.name, open_it=not args.no_open)
+            return 0
+        if not args.name:                                        # animate, no scene: open it
+            crafts.open_app("opentoonz", cfg=cfg)
+            scenes = crafts.opentoonz_scenes()
+            print("Animator: OpenToonz is opening. Save your scene in its projects folder, then "
+                  "nemo film animate <scene.tnz> makes the video."
+                  + (f" Scenes there: {', '.join(p.stem for p in scenes)}" if scenes else ""))
+            return 0
+        scene = Path(args.name).expanduser()
+        if not scene.is_file():
+            scene = next((p for p in crafts.opentoonz_scenes()
+                          if p.stem.lower() == args.name.lower()), scene)
+        crafts.render_scene(cfg, scene, fps=args.fps)
+        print("The Theatre lists it with the videos.")
+        return 0
+    except crafts.CraftError as exc:
+        print(f"Film Studio: {exc}.")
+        return 1
+
+
+def cmd_rebuild(args, cfg: Config) -> int:
+    """The Computer Lab's Rebuilder: Craft Anything (nemo/crafts.py). Nemo opens it and reads
+    its doctor; the build runs in your own signed-in coding agent, never Nemo's."""
+    from . import crafts
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(errors="replace")      # its doctor writes arrows (2026-11-19)
+    try:
+        if args.action == "doctor":
+            print(crafts.craft_anything_doctor(cfg).rstrip())
+            return 0
+        crafts.open_craft_anything(cfg)
+    except crafts.CraftError as exc:
+        print(f"Computer Lab: {exc}.")
+        return 1
+    print("Rebuilder: Craft Anything is opening. " + crafts.REBUILD_RULES)
     return 0
 
 
@@ -2356,9 +2510,10 @@ def main(argv: list[str] | None = None) -> int:
     ah.add_argument("--load", action="store_true", help="load it now, if it fits")
     md = sub.add_parser("model", help="the Art Studio: 3D printable models from shapes")
     md.add_argument("action", nargs="?", default="list",
-                    choices=["list", "build", "shapes", "kinds", "make", "card", "split"])
+                    choices=["list", "build", "shapes", "kinds", "make", "card", "split", "relief"])
     md.add_argument("spec", nargs="?",
-                    help="build: a JSON list of shapes; make: the kind; card, split: the model")
+                    help="build: a JSON list of shapes; make: the kind; card, split: the model; "
+                         "relief: a picture on the pictures shelf (or its path)")
     md.add_argument("choices", nargs="*",
                     help="make: the model's name, then key=value choices (`nemo model kinds`)")
     md.add_argument("--title", help="card: the model's title (empty clears it)")
@@ -2432,7 +2587,7 @@ def main(argv: list[str] | None = None) -> int:
     hm.add_argument("--all", action="store_true", help="list: hidden devices too")
     fm = sub.add_parser("film", help="the Film Studio: films from stories, clips, slideshows")
     fm.add_argument("action", nargs="?", default="list",
-                    choices=["list", "plan", "make", "join", "slideshow"])
+                    choices=["list", "plan", "make", "join", "slideshow", "edit", "animate"])
     fm.add_argument("name", nargs="?", help="plan/make: the story; join/slideshow: the film's name")
     fm.add_argument("items", nargs="*",
                     help="join: clips, each optionally cut as name@start-end; slideshow: pictures")
@@ -2441,6 +2596,12 @@ def main(argv: list[str] | None = None) -> int:
     fm.add_argument("--picture", help="plan/make: one picture for every scene")
     fm.add_argument("--music", nargs="*", help="slideshow: tracks, artists or albums")
     fm.add_argument("--seconds", type=float, default=5.0, help="slideshow: seconds a picture")
+    fm.add_argument("--no-open", action="store_true",
+                    help="edit: make the FilmCraft project, do not open it")
+    fm.add_argument("--fps", type=int, default=24, help="animate: frames a second (OpenToonz's 24)")
+    rb = sub.add_parser("rebuild", help="the Computer Lab's Rebuilder: open Craft Anything "
+                                        "(your own signed-in agent builds)")
+    rb.add_argument("action", nargs="?", default="open", choices=["open", "doctor"])
     gs = sub.add_parser("studio", help="the Game Studio: games in Godot from your idea")
     gs.add_argument("action", nargs="?", default="list",
                     choices=["list", "new", "play", "check", "kinds"])
@@ -2460,9 +2621,11 @@ def main(argv: list[str] | None = None) -> int:
     au.add_argument("name", nargs="?", help="narrate: the story; card: the card's name")
     au.add_argument("files", nargs="*", help="card: the sounds, in order")
     mu = sub.add_parser("music", help="the Music Room: play, cast, playlists")
-    mu.add_argument("action", nargs="?", default="list", choices=["list", "play", "cast", "save"])
+    mu.add_argument("action", nargs="?", default="list",
+                    choices=["list", "play", "cast", "save", "mix", "master"])
     mu.add_argument("names", nargs="*",
-                    help="tracks, artists, albums or a playlist; save: the playlist's name first")
+                    help="tracks, artists, albums or a playlist; save: the playlist's name first; "
+                         "mix: its name, stems, name=+dB; master: track, reference")
     mu.add_argument("--to", help="the Chromecast's name, when there is more than one")
     gm = sub.add_parser("games", help="Gaming: your retro games and their emulators")
     gm.add_argument("action", nargs="?", default="list", choices=["list", "play", "emulators"])
@@ -2517,7 +2680,7 @@ def main(argv: list[str] | None = None) -> int:
                "part": cmd_part, "store": cmd_store, "backup": cmd_backup,
                "clinic": cmd_clinic, "theatre": cmd_theatre, "games": cmd_games,
                "music": cmd_music, "audio": cmd_audio, "bench": cmd_bench,
-               "print": cmd_print, "guide": cmd_guide, "film": cmd_film, "studio": cmd_studio,
+               "print": cmd_print, "guide": cmd_guide, "film": cmd_film, "studio": cmd_studio, "rebuild": cmd_rebuild,
                "home": cmd_home, "comms": cmd_comms, "update": cmd_update, "wood": cmd_wood,
                "science": cmd_science,
                "staff": cmd_staff, "times": cmd_times, "lookup": cmd_lookup,

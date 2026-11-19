@@ -126,6 +126,18 @@ class TestItsPlaceInTheImage(unittest.TestCase):
             self.assertIn(f'-DGGML_{flag}="$AVX2"', b)
         self.assertIn("-DGGML_AVX512=OFF", b)
 
+    def test_no_web_page_is_fetched_while_building(self):
+        # D277: b11175 fetches its chat page from Hugging Face during the
+        # build. A --depth 1 clone has build number 1, so it asked for "b1",
+        # fell back to "latest", whose file list no longer matched b11175's,
+        # and the 2026-11-18 image build stopped at llama-server. Nemo only
+        # uses the server's API: both builds switch the download off.
+        for script in (LINUX / "build-llama.sh",
+                       APP / "install" / "live-build" / "build-iso.sh"):
+            s = script.read_text(encoding="utf-8")
+            self.assertIn("-DLLAMA_USE_PREBUILT_UI=OFF", s, script.name)
+            self.assertIn("-DLLAMA_BUILD_UI=OFF", s, script.name)
+
 
 if __name__ == "__main__":
     unittest.main()

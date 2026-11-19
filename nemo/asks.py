@@ -76,6 +76,11 @@ def _workshop(t, ctx):
 
 
 def _computer_lab(t, ctx):
+    if _has(t, "craft anything", "rebuild", "rebuilder"):
+        if _has(t, "doctor", "check", "set up", "setup", "ready"):
+            return Reply(RUN, "The Rebuilder asks Craft Anything how it is.", ["rebuild", "doctor"])
+        return Reply(RUN, "The Rebuilder opens Craft Anything: your own signed-in agent builds.",
+                     ["rebuild"])
     if not (ctx or {}).get("project"):
         return Reply(SAY, "Open a project first: the Computer Lab works on the open project's "
                           "firmware.")
@@ -164,6 +169,21 @@ _KINDS = ("plaque", "box", "pot", "tag", "stand")
 
 
 def _art_studio(t, ctx):
+    if _has(t, "relief", "lithophane"):
+        # A panel raised from a picture (nemo/relief.py; owner, 2026-11-18).
+        litho = _has(t, "lithophane")
+        pic = _after(t, "relief of", "relief from", "lithophane of", "lithophane from", "relief",
+                     "lithophane")
+        pic = re.split(r"\s+(?:\d+(?:\.\d+)?\s*(?:mm|cm)\b|at\s+\d|that is|which is)", pic, maxsplit=1)[0]
+        pic = pic.strip(" .,'\"")
+        if not pic:
+            return Reply(SAY, "Which picture? Put it on the Storeroom's pictures shelf, then say "
+                              "'a relief of <its name>' (or 'a lithophane of <its name>').")
+        args = ["model", "relief", pic] + (["mode=lithophane"] if litho else [])
+        m = re.search(r"(\d+(?:\.\d+)?)\s*(mm|cm)\s+(?:wide|across)", t, re.I)
+        if m:
+            args.append(f"width={float(m.group(1)) * (10 if m.group(2).lower() == 'cm' else 1):g}")
+        return Reply(RUN, "The Designer raises it from the picture; the Editor checks it.", args)
     kind = next((k for k in _KINDS if _has(t, k, k + "s")), "")
     if _has(t, "kinds", "what can you make"):
         return Reply(RUN, "", ["model", "kinds"])
@@ -184,6 +204,20 @@ def _art_studio(t, ctx):
             if m:
                 args.append(f"{key}={m.group(1) or m.group(2)}")
         return Reply(RUN, "The Clerk sets it up; the Designer builds it; the Editor checks it.", args)
+    if _has(t, "sculpture", "sculpt", "statue", "bust", "figurine", "figure", "3d model", "3d print",
+            "model of", "carving"):
+        # 2026-11-18, the owner asked for "a 3d sculpture of mona lisa": said plainly, not
+        # "did not understand" (and never handed to the model, which cannot model a face).
+        of = _after(t, "sculpture of", "statue of", "bust of", "figurine of", "figure of",
+                    "model of", "carving of") or "<its name>"
+        return Reply(SAY, "The Art Studio cannot sculpt a person, a face or a painting in the "
+                          "round: a picture does not hold the far side or the depth. It can "
+                          "make a relief, a panel raised from a picture like a carved plaque: "
+                          "put the picture on the Storeroom's pictures shelf, then say "
+                          f"'a relief of {of}'. Its Designer also builds simple shapes (" +
+                          ", ".join(_KINDS) + "), and the Workshop's concepts know a few "
+                          "objects by their parts (long guns, pistols, swords, lighthouses, "
+                          "rockets, houses).")
     return None
 
 
@@ -198,6 +232,19 @@ def _printshop(t, ctx):
 
 
 def _film(t, ctx):
+    if _has(t, "animate", "animation", "anime", "cartoon", "opentoonz", "render scene"):
+        m = re.search(r"\b(?:render|scene)\s+(?:(?:the|my|scene)\s+)*(.+)$", t, re.I)
+        scene = m.group(1).strip(" .\"'") if m else ""
+        return Reply(RUN, "The Animator " + ("renders it." if scene else "opens OpenToonz."),
+                     ["film", "animate", *([scene] if scene else [])])
+    if _has(t, "edit", "cut", "trim", "filmcraft", "by hand"):
+        # A film's own title may begin with "A" ("A Fox"): only "the"/"my" are dropped.
+        m = re.search(r"\b(?:edit|cut|trim|open)\s+(?:(?:the|my)\s+)?(?:film\s+)?(.+)$", t, re.I)
+        name = re.sub(r"\s+(?:by hand|in filmcraft)$", "", m.group(1).strip(" .\"'"),
+                      flags=re.I) if m else ""
+        if name:
+            return Reply(RUN, "The Finishing Editor makes it a FilmCraft project.",
+                         ["film", "edit", name])
     if _has(t, "list", "films"):
         return Reply(RUN, "", ["film", "list"])
     if _has(t, "plan"):
@@ -238,6 +285,20 @@ def _theatre(t, ctx):
 
 
 def _music(t, ctx):
+    if _has(t, "master", "mastering", "mastered"):
+        m = re.search(r"\bmaster(?:ing|ed)?\s+(?:(?:the|my)\s+)?(.+?)\s+(?:to sound like|like|"
+                      r"against|with the reference|with)\s+(?:(?:the|my)\s+)?(.+)$", t, re.I)
+        if m:
+            return Reply(RUN, "The Mastering Engineer makes it sound like your reference.",
+                         ["music", "master", m.group(1).strip(" .\"'"),
+                          m.group(2).strip(" .\"'")])
+        return Reply(SAY, "Say 'master <track> like <reference>': the reference is a finished "
+                          "song whose sound you want; Nemo never fetches one.")
+    if _has(t, "mix", "mixdown"):
+        what = _after(t, "mixdown", "mix")
+        if what:
+            return Reply(RUN, "The Mix Engineer mixes the stems with SoundCraft.",
+                         ["music", "mix", what, what])
     if _cast(t):
         return Reply(WINDOW, "Choose the tracks and a device, then press Cast: Nemo never "
                              "casts unasked.", button="Cast")
@@ -332,16 +393,18 @@ HANDLERS = {"workshop": _workshop, "computer_lab": _computer_lab, "library": _li
 # the shape of a request, not answers: docs/design-rules.md 4b does not apply, no model reads them).
 CAN_DO = {
     "workshop": "describe a thing to build; 'flooring 4.2 x 3.6 m'; 'run'; 'second opinion'",
-    "computer_lab": "'build the firmware'; 'write the guide'",
+    "computer_lab": "'build the firmware'; 'write the guide'; 'craft anything'",
     "library": "describe a story; 'look up <words>'; 'list'",
     "science": "'100 F to C'; 'solve x**2 = 9'; 'R=? V=5 V I=20 mA'; 'mean of 3 5 7'",
     "comms": "'letter to <name>: <words>'; 'email <name>: <words>'; 'open <site>'; 'contacts'",
-    "art_studio": "'a tag saying SHED'; 'a box 80 mm wide'; 'kinds'; 'list'",
+    "art_studio": "'a tag saying SHED'; 'a box 80 mm wide'; 'a relief of <picture>'; 'kinds'; 'list'",
     "printshop": "'slice <model>'; 'list'",
-    "film": "'make a film of <story>'; 'plan <story>'; 'list'",
+    "film": "'make a film of <story>'; 'plan <story>'; 'edit <film> by hand'; 'animate'; "
+            "'render scene <scene>'; 'list'",
     "audio": "'narrate <story>'; 'record'; 'list'",
     "theatre": "'play <video>'; 'check <video>'; 'cast'; 'list'",
-    "music": "'play <track>'; 'cast'; 'list'",
+    "music": "'play <track>'; 'mix <stems folder>'; 'master <track> like <reference>'; "
+             "'cast'; 'list'",
     "gaming": "'play <game>'; 'list'; 'emulators'",
     "home": "'look around'; 'list'",
     "bench": "'flash it'; 'listen'; 'ports'",

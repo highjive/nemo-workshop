@@ -125,7 +125,35 @@ def _prompt(text: str, title: str = "", known: set[str] = frozenset()) -> str:
     named = [x for x in sentences[:3] if any(n.split()[-1] in x for n in known)]
     pick = (named or sentences)[0]
     about = f", from the story \"{title}\"" if title else ""
-    return f"{STYLE}{about}: " + " ".join(pick.split()[:40])
+    lit = colours(text)
+    hue = f", in {' and '.join(lit)} light" if lit else ""
+    return f"{STYLE}{about}{hue}: " + " ".join(pick.split()[:40])
+
+
+# D281 (2026-11-19, the owner's film test): seven towers, each with its own colour in the
+# story ("amber light", "teal-tinged", "a coral thread"), were painted from first sentences
+# that named none, so the colours were lost. A colour that describes light comes first.
+COLOURS = ("amber", "teal", "blue", "green", "coral", "violet", "pink", "red", "orange",
+           "yellow", "gold", "golden", "silver", "purple", "crimson", "scarlet", "turquoise",
+           "white", "black", "grey", "gray", "indigo", "emerald", "copper", "rose")
+_LIGHT = r"(?:light|lights|thread|threads|glow|glows|glowing|-tinged|-lit|resonance|flame|fire)"
+
+
+def colours(text: str, most: int = 2) -> list[str]:
+    """The scene's colours, at most `most`: first those that describe light ("amber light",
+    "teal-tinged", "a coral thread"), then any other, each in the order it comes."""
+    words = "|".join(COLOURS)
+    lit = re.findall(rf"\b({words})\s*{_LIGHT}", text, re.I)
+    rest = re.findall(rf"\b({words})\b", text, re.I)
+    out = []
+    for c in lit + rest:
+        c = c.lower()
+        if c not in out:
+            out.append(c)
+    return out[:most]
+
+
+SEED = 7              # the Artist's own default; scene n is painted with SEED + n (D280)
 
 
 def plan_story(folder: Path) -> Plan:
@@ -315,7 +343,9 @@ def make_film(cfg, plan: Plan, paint: bool = True, say=print) -> Made:
         if not pic.is_file():
             if paint:
                 from . import artist
-                artist.paint(pic, s.prompt, cfg, say=say)
+                # D280 (2026-11-19): one seed for every scene gave every picture the
+                # same layout (seven towers alike); each scene has its own now.
+                artist.paint(pic, s.prompt, cfg, seed=SEED + n, say=say)
                 painted += 1
             elif cover is not None and cover.is_file():
                 pic = cover

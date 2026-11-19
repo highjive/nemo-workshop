@@ -42,7 +42,7 @@ class TestTheRoster(unittest.TestCase):
                                               "Clerk", "Datasheet Reader", "Second Opinion", "PCB Designer",
                                               "Woodworker", "Foreman", "Timekeeper"])
         self.assertEqual(titles("computer_lab"), ["Writer", "Designer", "Coder", "Tester",
-                                                  "Technician", "Reverse Engineer", "Quality Inspector",
+                                                  "Technician", "Reverse Engineer", "Quality Inspector", "Rebuilder",
                                                   "Foreman", "Timekeeper"])
         self.assertEqual(titles("storeroom"), ["Storekeeper", "Writer", "Researcher"])
         self.assertTrue(staff.STAFF["storeroom.storekeeper"].working)

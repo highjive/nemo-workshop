@@ -442,6 +442,16 @@ def _ffmpeg(cfg):
     return (True, str(p)) if p else (False, "ffmpeg is not installed (NemoDoc fetches it)")
 
 
+def _craft(key: str) -> Need:
+    """A program from nemo/crafts.py PROGRAMS."""
+    def check(cfg):
+        from . import crafts
+        exe = crafts.find(key, cfg)
+        return (True, str(exe)) if exe else (False, crafts.not_installed(key))
+    from .crafts import PROGRAMS
+    return Need(PROGRAMS[key].label, check)
+
+
 def _videos_shelf():
     from .config import Config
     return Config.load().path("paths.storeroom") / "videos"
@@ -528,6 +538,9 @@ NEEDS: dict[str, tuple[Need, ...]] = {
     "music.player": (Need("VLC", _vlc),),
     "music.dj": (Need("casting", _caster),),
     "music.writer": (_place("playlists", _music_shelf),),
+    "music.mixer": (_craft("soundcraft"), _module("soundfile", "it measures each stem"),
+                    _place("the music shelf", _music_shelf)),
+    "music.mastering": (_module("matchering", "it masters a track to a reference"),),
     # Audio (built 2026-10-21)
     "audio.narrator": (Need("a voice", _voice), _place("audiobooks", _audio_shelf)),
     "audio.recorder": (Need("a recorder", _microphone), _place("recordings", _audio_shelf)),
@@ -548,6 +561,8 @@ NEEDS: dict[str, tuple[Need, ...]] = {
     "film.narrator": (Need("a voice", _voice),),
     "film.editor": (Need("ffmpeg", _ffmpeg), _place("the videos shelf", _videos_shelf)),
     "film.writer": (_module("PIL", "it draws the title and credits cards"),),
+    "film.animator": (_craft("opentoonz"), Need("ffmpeg", _ffmpeg)),
+    "film.finisher": (_craft("filmcraft"),),
     # Home (built 2026-10-22)
     "home.surveyor": (_module("zeroconf", "it hears what devices announce; pychromecast brings it"),),
     "home.gatekeeper": (_place("the permissions", _queue_home),),
@@ -590,6 +605,7 @@ NEEDS: dict[str, tuple[Need, ...]] = {
     "storeroom.writer": (not_built("a label for each item"),),
     "storeroom.researcher": (Need("the catalogue", _catalogue),),   # and the parts library
     "computer_lab.quality": (Need("the task file", _task_file), Need("the engine", _engine)),
+    "computer_lab.rebuilder": (_craft("craft-anything"),),
     "computer_lab.rea": (Need("Node.js", _node), Need("REA", _rea),
                          Need("Ghidra", _ghidra), Need("Java 21", _java)),
 }

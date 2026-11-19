@@ -241,7 +241,11 @@ def card(folder: Path) -> str:
     for s in spec.get("shapes", []):
         name = s["shape"] + (" cut" if s.get("op") == "cut" else "")
         counts[name] = counts.get(name, 0) + 1
-    lines.append("Shapes      " + ", ".join(f"{n} x{c}" if c > 1 else n for n, c in counts.items()))
+    if spec.get("kind") == "relief":                  # raised from a picture (nemo/relief.py)
+        lines.append(f"Made from   a {spec.get('mode', 'relief')} of {Path(spec.get('picture', '?')).name}, "
+                     f"{spec.get('base_mm', 0):g} mm back + {spec.get('depth_mm', 0):g} mm of picture")
+    else:
+        lines.append("Shapes      " + ", ".join(f"{n} x{c}" if c > 1 else n for n, c in counts.items()))
     stl = folder / "model.stl"
     if stl.is_file():
         from . import printshop

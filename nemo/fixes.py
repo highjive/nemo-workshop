@@ -92,7 +92,11 @@ def _rails_for(loads, primary: float, converters=()) -> tuple[list[float], list[
             continue
         if any(abs(v - primary) < 0.35 for v in p.supply_v):
             continue
-        if has_regulator and any(abs(v - 3.3) < 0.2 for v in p.supply_v):
+        # D287: the board's own regulator feeds the other parts, never the board: it sits
+        # behind the board's supply pin. An ESP32 DevKit on a cell was counted as running
+        # from its own 3.3 V, so no converter, and a 1000 mAh cell was offered as "44% spare"
+        # for a design the current check failed (2026-11-19, the RFID brief).
+        if has_regulator and p.category != "mcu" and any(abs(v - 3.3) < 0.2 for v in p.supply_v):
             rails.add(3.3)
             continue
         conv = next((c for c in converters if any(
@@ -176,6 +180,12 @@ def power_plan(parts, library, current_power: str = "") -> PowerPlan:
         # runtime estimate, which silently overstated it.
         s_peak, s_typical = peak, typical
         conv_names = []
+        # D287: when the board itself needs the converter, every part is fed from the board
+        # (harness.wire_loads) and so through the converter too: all of it is counted there,
+        # as checks.current_sum and harness.supply_chain have it.
+        board_conv = next(((c, v) for ld, c, v in converted if ld.category == "mcu"), None)
+        if board_conv is not None:
+            converted = [(ld, board_conv[0], board_conv[1]) for ld in loads if ld.draw_ma or ld.current_ma]
         for load, conv, out_v in converted:
             eff = conv.efficiency or 1.0
             extra_peak = load.draw_ma * out_v / (s.primary_v * eff)
@@ -232,11 +242,22 @@ def power_plan(parts, library, current_power: str = "") -> PowerPlan:
                      [(p.name, p.draw_ma) for p in loads], options)
 
 
+def _cell_ref(ref: str) -> bool:
+    from .parts import PartsLibrary
+    p = PartsLibrary.load().get(ref)
+    return p is not None and _is_lipo_cell(p)
+
+
 def apply_power(brief, option: PowerOption):
     b = copy.deepcopy(brief)
     b.power = option.supply.power
     b.supply_ma = option.supply.ma
     b.rails = option.rails
+    # D288 (2026-11-19, the RFID brief): a battery option added its cell beside the cell the
+    # design had, two cells, which the wiring (harness.supply_chain: one cell) refuses. A
+    # power option is the whole supply: the cells it does not choose go.
+    if option.supply.battery:
+        b.parts = [r for r in b.parts if r in option.add_parts or not _cell_ref(r)]
     for ref in option.add_parts:
         if ref not in b.parts:
             b.parts.append(ref)
@@ -257,6 +278,7 @@ class Fix:
     set_fields: dict = field(default_factory=dict)
     add_parts: list = field(default_factory=list)
     add_constraints: list = field(default_factory=list)
+    remove_parts: list = field(default_factory=list)      # D288: a cell a battery option replaces
     # For advice whose remedy is a value only the owner can give: the
     # brief's field it goes in. The window then offers to open the brief
     # at that field instead of a greyed-out button.
@@ -278,6 +300,7 @@ class Fix:
                 return "inside size: " + " x ".join(f"{x:g}" for x in v) + " mm"
             return f"{k.replace('_', ' ')}: {v}"
         out = [say(k, v) for k, v in self.set_fields.items()]
+        out += [f"remove part {r}" for r in self.remove_parts]
         out += [f"add part {r}" for r in self.add_parts]
         out += [f"add constraint: {c}" for c in self.add_constraints]
         return out
@@ -290,6 +313,7 @@ def apply_fix(brief, fix: Fix):
     b = copy.deepcopy(brief)
     for k, v in fix.set_fields.items():
         setattr(b, k, v)
+    b.parts = [r for r in b.parts if r not in fix.remove_parts]
     for r in fix.add_parts:
         if r not in b.parts:
             b.parts.append(r)
@@ -301,6 +325,28 @@ def apply_fix(brief, fix: Fix):
 
 def _round_up(x: float, step: float = 5.0) -> float:
     return float(math.ceil(x / step) * step)
+
+
+def _grow_for(fix: Fix, brief, library) -> None:
+    """D290 (2026-11-19, the RFID brief): the 2000 mAh option swapped in a bigger cell and
+    left the box as it was; the concept step then found the parts did not fit. Where the
+    fixed parts no longer fit the brief's envelope, the fix grows it as well, in its own
+    listed changes ("inside size"), so the owner sees it before applying."""
+    from .enclosure import fitting_size, layout_fault
+    env = list(brief.envelope_mm or [])
+    if len(env) != 3 or getattr(brief, "no_parts", False):
+        return
+    refs = [r for r in brief.parts or [] if r not in fix.remove_parts]
+    refs += [r for r in fix.add_parts if r not in refs]
+    parts = [library.get(r) for r in refs]
+    parts = [p for p in parts if p is not None]
+    if not parts or layout_fault(parts, env) is None:
+        return
+    new = fitting_size(parts, env)
+    if new:
+        fix.set_fields["envelope_mm"] = new
+        fix.why += (" The box grows to hold the new parts: "
+                    + " x ".join(f"{v:g}" for v in new) + " mm.")
 
 
 def _power_fixes(brief, parts, library, rerun) -> list[Fix]:
@@ -316,7 +362,10 @@ def _power_fixes(brief, parts, library, rerun) -> list[Fix]:
             "change", rerun,
             set_fields={"power": o.supply.power, "supply_ma": o.supply.ma,
                         "rails": o.rails},
-            add_parts=list(o.add_parts)))
+            add_parts=list(o.add_parts),
+            remove_parts=[r for r in brief.parts or [] if o.supply.battery
+                          and _cell_ref(r) and r not in o.add_parts]))
+        _grow_for(fixes[-1], brief, library)
     if not fixes and plan.loads:
         big = max(plan.loads, key=lambda t: t[1])
         if battery_design(brief.power, parts):

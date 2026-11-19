@@ -108,7 +108,15 @@ def nets(doc: dict, parts: list[Part]) -> dict[str, list[tuple[str, str]]]:
         return ("power", v) if v else ("", None)
 
     named: dict[str, list[tuple[str, str]]] = {}
-    for members in groups.values():
+    # D289 (2026-11-19, the RFID brief): groups the wires keep apart were merged by name. A
+    # battery chain has two 3.7 V links (cell to charger, charger to converter) and its own
+    # negatives, which must never meet the board's ground direct; named alike, they became
+    # one "+3V7" and one GND, the charger's protection bypassed, and the harness (right)
+    # and the schematic disagreed. Each group is its own net now; the board's ground (the
+    # group holding a microcontroller pin) is named first, so it keeps the name GND.
+    order = sorted(groups.values(),
+                   key=lambda ms: not any(by_ref[m[0]].category == "mcu" for m in ms))
+    for members in order:
         members = sorted(members)
         kinds = [function(m) for m in members]
         mcu_pins = [m[1] for m in members if by_ref[m[0]].category == "mcu"]
@@ -122,7 +130,7 @@ def nets(doc: dict, parts: list[Part]) -> dict[str, list[tuple[str, str]]]:
         else:
             name = re.sub(r"\W", "_", f"{members[0][0]}_{members[0][1]}").upper()
         base, n = name, 2
-        while name in named and name not in ("GND",) and not name.startswith("+"):
+        while name in named:
             name, n = f"{base}_{n}", n + 1
         named.setdefault(name, []).extend(members)
     return named
@@ -179,7 +187,7 @@ def skidl_script(doc: dict, parts: list[Part]) -> str:
             else:
                 lines.append(f"j{i}[{n}] += NC    # {pin}: not used in this design")
         lines.append("")
-    rails = [n for n in netmap if n == "GND" or n.startswith("+")]
+    rails = [n for n in netmap if re.fullmatch(r"GND(_\d+)?", n) or n.startswith("+")]
     if rails:
         lines.append("# KiCad's rules check wants every supply net marked as driven.")
         for k, name in enumerate(rails, 1):

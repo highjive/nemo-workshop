@@ -31,6 +31,8 @@
       .\NemoDoc.ps1 -SkipFilm    do not download ffmpeg for the Film Studio (35 MB)
       .\NemoDoc.ps1 -SkipDrawings  do not download CADCraft for the Workshop's drawings (74 MB)
       .\NemoDoc.ps1 -SkipBooks   do not download WordCraft for books and the pack PDF (118 MB)
+      .\NemoDoc.ps1 -SkipCrafts  do not download SoundCraft, Matchering, OpenToonz, FilmCraft
+                                or Craft Anything (mixing, animation, hand editing, rebuilding)
       .\NemoDoc.ps1 -SkipArtist  do not download the Artist's image model (2 GB);
                                 story covers then say what is missing
 #>
@@ -50,6 +52,7 @@ param(
     [switch]$SkipPcb,
     [switch]$SkipDrawings,
     [switch]$SkipBooks,
+    [switch]$SkipCrafts,
     [switch]$Force
 )
 
@@ -1053,6 +1056,75 @@ if (-not $SkipBooks) {
         Remove-Item $staged -Force -ErrorAction SilentlyContinue
         Remove-Item (Join-Path $ToolsDir "wordcraft") -Recurse -Force -ErrorAction SilentlyContinue
         Rename-Item $unpacked "wordcraft"
+    } $false | Out-Null
+}
+
+# Mixing, animation, hand editing, rebuilding (owner, 2026-11-19: "grab and add to nemo").
+# nemo/crafts.py PROGRAMS holds the same files, sizes and hashes (GitHub's own digests;
+# the ArtCraft releases repeat them in SHA256SUMS.txt) and a test holds the two together.
+# SoundCraft and OpenToonz go on any Windows machine; FilmCraft and Craft Anything only
+# where the NVIDIA test above found a desktop (the owner's choice: the desktop only).
+# Matchering 2.0.6 (the Mastering Engineer) from PyPI with its dependencies.
+$CraftZips = @(
+    @{ key = "soundcraft"; version = "0.20.1"; file = "soundcraft-0.20.1-windows-x64-portable.zip"; sha256 = "9769223e26f727866b249fc5176caa8b3791a98c7d89e901b78f5f48aff03b82"; bytes = 19876437; url = "https://github.com/storytold/soundcraft/releases/download/v0.20.1/soundcraft-0.20.1-windows-x64-portable.zip"; desktop = $false },
+    @{ key = "filmcraft"; version = "0.20.1"; file = "filmcraft-0.20.1-windows-x64-portable.zip"; sha256 = "bfb00e2089df5f13e6f76aab117a4572a8d005d009c5818989688b140a502710"; bytes = 113447048; url = "https://github.com/storytold/filmcraft/releases/download/v0.20.1/filmcraft-0.20.1-windows-x64-portable.zip"; desktop = $true },
+    @{ key = "craft-anything"; version = "0.6.1"; file = "craft-anything-0.6.1-windows-x64-portable.zip"; sha256 = "bd370fbaa2b44dbc13581db5ffd2bf66924ed40e433c7902212aa17ca781de54"; bytes = 69934191; url = "https://github.com/storytold/craft-anything/releases/download/v0.6.1/craft-anything-0.6.1-windows-x64-portable.zip"; desktop = $true }
+)
+$OpenToonzSetup = @{ file = "OpenToonzSetup.exe"; sha256 = "bd678a03d2725522346bf5a055a7bc44ded6537957efb0026bfd875d3ac061d0"; bytes = 59788942; url = "https://github.com/opentoonz/opentoonz/releases/download/v1.8.0/OpenToonzSetup.exe" }
+if (-not $SkipCrafts) {
+    foreach ($c in $CraftZips) {
+        if ($c.desktop -and $NvidiaMiB -lt 7000) { continue }
+        $cli = Join-Path $ToolsDir ("{0}\{0}-cli.exe" -f $c.key)
+        Step ("{0} {1}" -f $c.key, $c.version) {
+            if (-not (Test-Path $cli)) { return $false }
+            return ((& $cli --version 2>$null) -match [regex]::Escape($c.version))
+        } {
+            $staged = Join-Path $env:TEMP $c.file
+            Remove-Item $staged -Force -ErrorAction SilentlyContinue
+            if (-not (Get-File $c.url $staged $c.file)) { return }
+            $actual = (Get-FileHash -Path $staged -Algorithm SHA256).Hash.ToLower()
+            if ($actual -ne $c.sha256) {
+                Log "$($c.file) hash mismatch: expected $($c.sha256) got $actual"
+                Remove-Item $staged -Force -ErrorAction SilentlyContinue
+                Say "        $($c.file) did not match the expected hash; refusing to install it" "Red"
+                return
+            }
+            $unpacked = Join-Path $ToolsDir ([IO.Path]::GetFileNameWithoutExtension($c.file))
+            Remove-Item $unpacked -Recurse -Force -ErrorAction SilentlyContinue
+            Expand-Zip $staged $ToolsDir | Out-Null
+            Remove-Item $staged -Force -ErrorAction SilentlyContinue
+            Remove-Item (Join-Path $ToolsDir $c.key) -Recurse -Force -ErrorAction SilentlyContinue
+            Rename-Item $unpacked $c.key
+        } $false | Out-Null
+    }
+    # OpenToonz ships only an installer (Inno Setup): run silently into tools\opentoonz.
+    # It also makes C:\OpenToonz stuff and one HKLM key naming it; its uninstaller
+    # (tools\opentoonz\unins000.exe) removes them.
+    $Tcomposer = Join-Path $ToolsDir "opentoonz\tcomposer.exe"
+    Step "OpenToonz 1.8.0 (the Animator)" { return (Test-Path $Tcomposer) } {
+        $f = $OpenToonzSetup
+        $staged = Join-Path $env:TEMP $f.file
+        Remove-Item $staged -Force -ErrorAction SilentlyContinue
+        if (-not (Get-File $f.url $staged $f.file)) { return }
+        $actual = (Get-FileHash -Path $staged -Algorithm SHA256).Hash.ToLower()
+        if ($actual -ne $f.sha256) {
+            Log "$($f.file) hash mismatch: expected $($f.sha256) got $actual"
+            Remove-Item $staged -Force -ErrorAction SilentlyContinue
+            Say "        $($f.file) did not match the expected hash; refusing to install it" "Red"
+            return
+        }
+        $dir = Join-Path $ToolsDir "opentoonz"
+        $p = Start-Process -FilePath $staged -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/DIR=`"$dir`"" -PassThru -Wait
+        Remove-Item $staged -Force -ErrorAction SilentlyContinue
+        if ($p.ExitCode -ne 0) { Say "        OpenToonz's installer stopped (exit $($p.ExitCode))" "Red" }
+    } $false | Out-Null
+    Step "Mastering (Matchering 2.0.6)" {
+        if (-not (Test-Path $VenvPy)) { return $false }
+        $probe = & $VenvPy -I -c "import importlib.util as u; print('ok' if u.find_spec('matchering') else 'no')" 2>$null
+        return ($probe -eq "ok")
+    } {
+        Say "        pip: matchering" "DarkGray"
+        & $VenvPip install --quiet "matchering==2.0.6" "wrapt<2.6" 2>&1 | Out-Null
     } $false | Out-Null
 }
 

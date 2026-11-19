@@ -838,6 +838,22 @@ class NemoApp(tk.Tk):
         win.wm_withdraw()
         return True
 
+    def make_way(self) -> bool:
+        """D282 (2026-11-19, the owner: "images and videos in theatre wont play when
+        selected"). On Linux the embedded department is overrideredirect (see
+        stand_aside), and an X window manager keeps such a window above every window it
+        manages: VLC or the picture viewer opened UNDER it, so nothing seemed to play.
+        So Nemo minimises itself; the <Unmap> binding hides the department with it and
+        <Map> puts it back when the owner clicks Nemo on the taskbar. Windows stacks a
+        newly opened program above Nemo by itself and is left alone."""
+        if self._embedded is None or self.windowing() != "x11":
+            return False
+        self.iconify()
+        return True
+
+    def windowing(self) -> str:
+        return self.tk.call("tk", "windowingsystem")
+
     def come_back(self):
         if self._stood_aside:
             self._stood_aside = False
@@ -5112,7 +5128,26 @@ class IllustratedRoom(tk.Toplevel):
         # The team's problems with the open project (nemo/issues.py): a red ring and a "!".
         self._issues = {}
         self.refresh_issues()
-        self.canvas = tk.Canvas(self, width=self.W, height=self.H, highlightthickness=0, bg="#21170F")
+        # Laid out like the Workshop (owner, 2026-11-18; nemo/desks.py): the department's
+        # own list on the left with its "New" button, tabs on the right; the painted
+        # room and its team are the "Team" tab.
+        from .. import desks
+        self.desk = desks.DESKS.get(key)
+        self.entries, self.chosen = [], None
+        body = tk.Frame(self, bg=T.PAPER); body.pack(fill="both", expand=True)
+        if self.desk is not None:
+            self._desk_side(body)
+        self.tabs = ttk.Notebook(body)
+        self.tabs.pack(side="left", fill="both", expand=True)
+        if self.desk is not None:
+            self.tab_entry = ttk.Frame(self.tabs, style="Panel.TFrame", padding=14)
+            self.tabs.add(self.tab_entry, text=self.desk.tab)
+            self._entry_tab()
+        self._team = tk.Frame(self.tabs, bg="#21170F")
+        self.tabs.add(self._team, text="Team")
+        self.W = max(400, self.W - (T.scaled(272, app.text_percent) if self.desk else 0))
+        self.canvas = tk.Canvas(self._team, width=self.W, height=self.H, highlightthickness=0,
+                                bg="#21170F")
         self.canvas.pack(fill="both", expand=True)
         self._draw(self.W, self.H)
         bar = tk.Frame(self, bg=T.SHELL); bar.pack(fill="x", pady=4)
@@ -5128,7 +5163,7 @@ class IllustratedRoom(tk.Toplevel):
         # Full screen (owner, 2026-11-04): the room fills the space Nemo gives
         # it. Embedded, that is the whole window below the bar (1366 wide at
         # full screen here, against the 960 it was drawn at).
-        self.bind("<Configure>", self._resized, add="+")
+        self._team.bind("<Configure>", self._resized, add="+")
         self.bind("<Escape>", self.hide_profile)
         # Keyboard only (2026-11-08): Left and Right choose a face, Enter or
         # Space opens its card, Escape closes it. A dashed ring shows which.
@@ -5143,6 +5178,140 @@ class IllustratedRoom(tk.Toplevel):
         from .. import introductions
         if not introductions.seen(C.load_settings(), key):
             self.introduce()
+
+    # ------------------------------------------------- its list, as the Workshop's
+    def _desk_side(self, body):
+        app = self.app
+        side = ttk.Frame(body, width=T.scaled(272, app.text_percent))
+        side.pack(side="left", fill="y", padx=(12, 12), pady=12)
+        side.pack_propagate(False)
+        ttk.Label(side, text=self.desk.title, style="H2.TLabel").pack(anchor="w")
+        self.new_button = ttk.Button(side, text=self.desk.new, style="Primary.TButton",
+                                     command=self.new_entry)
+        self.new_button.pack(side="bottom", fill="x")
+        self.list_box = tk.Listbox(side, bg=T.PANEL, fg=T.INK, relief="flat", highlightthickness=1,
+                                   highlightbackground=T.RULE, highlightcolor=T.BLUE,
+                                   selectbackground=T.SELECT, selectforeground=T.INK,
+                                   activestyle="none", font=app.fonts["body"], exportselection=False)
+        self.list_box.pack(fill="both", expand=True, pady=(8, 8))
+        self.list_box.bind("<<ListboxSelect>>", lambda e: self.choose_entry())
+        # D282: choosing an item only showed its page; a double click (or Enter) now does
+        # its first action too, e.g. the Theatre's "Play it here".
+        self.list_box.bind("<Double-Button-1>", lambda e: self.do_first_action())
+        self.list_box.bind("<Return>", lambda e: self.do_first_action())
+        self.list_note = ttk.Label(side, style="Muted.TLabel", wraplength=T.scaled(250, app.text_percent),
+                                   justify="left")
+        self.list_note.pack(side="bottom", anchor="w", pady=(0, 6))
+
+    def _entry_tab(self):
+        f = self.tab_entry
+        self.entry_title = ttk.Label(f, text="", style="Title.TLabel")
+        self.entry_title.pack(anchor="w")
+        self.entry_actions = ttk.Frame(f, style="Panel.TFrame")
+        self.entry_actions.pack(side="bottom", fill="x")
+        self.entry_picture = ttk.Label(f, style="Panel.TLabel")          # a model's, a cover...
+        self.entry_picture.pack(side="right", anchor="n", padx=(12, 0), pady=(8, 8))
+        self._entry_photo = None
+        self.entry_about = tk.Text(f, height=8, wrap="word", relief="flat", bg=T.PANEL, fg=T.INK,
+                                   font=self.app.fonts["body"], highlightthickness=0)
+        self.entry_about.pack(fill="both", expand=True, pady=(8, 8))
+        self.refresh_list()
+
+    def refresh_list(self, keep: bool = True):
+        """Read the department's list again (nemo/desks.py), keeping the chosen one."""
+        if self.desk is None:
+            return []
+        from .. import desks
+        was = self.chosen.id if (keep and self.chosen) else None
+        self.entries, problem = desks.entries(self.key, self.app.cfg)
+        self.list_box.delete(0, "end")
+        for e in self.entries:
+            self.list_box.insert("end", e.label)
+        self.list_note.config(text=problem or ("" if self.entries else self.desk.empty))
+        at = next((i for i, e in enumerate(self.entries) if e.id == was), 0 if self.entries else None)
+        if at is not None:
+            self.list_box.selection_set(at); self.list_box.see(at)
+        self.choose_entry(at)
+        return self.entries
+
+    def choose_entry(self, at: int | None = None):
+        if at is None:
+            sel = self.list_box.curselection() if self.entries else ()
+            at = sel[0] if sel else None
+        self.chosen = self.entries[at] if at is not None and at < len(self.entries) else None
+        for w in self.entry_actions.winfo_children():
+            w.destroy()
+        self.entry_about.config(state="normal")
+        self.entry_about.delete("1.0", "end")
+        if self.chosen is None:
+            self.entry_title.config(text=self.desk.empty)
+            self.entry_about.insert("end", self.desk.hint)
+        else:
+            self.entry_title.config(text=self.chosen.label)
+            self.entry_about.insert("end", self.chosen.about)
+        self._show_picture(self.chosen.picture if self.chosen else None)
+        if self.chosen is not None:
+            for a in self.chosen.actions:
+                ttk.Button(self.entry_actions, text=a.label,
+                           command=lambda a=a: self.do_action(a)).pack(side="left", padx=(0, 8))
+        self.entry_about.config(state="disabled")
+        return self.chosen
+
+    def _show_picture(self, path):
+        """The chosen entry's picture, at most 420 pixels across; none if it is not there."""
+        self._entry_photo = None
+        if path is not None and Path(path).is_file():
+            try:
+                from PIL import Image, ImageTk
+                im = Image.open(path).convert("RGB")
+                im.thumbnail((T.scaled(420, self.app.text_percent),) * 2)
+                self._entry_photo = ImageTk.PhotoImage(im)
+            except (OSError, ValueError):
+                self._entry_photo = None
+        self.entry_picture.config(image=self._entry_photo or "")
+
+    def do_first_action(self):
+        """The chosen entry's first action (a double click or Enter on the list)."""
+        chosen = self.choose_entry()
+        if chosen is None or not chosen.actions:
+            return None
+        return self.do_action(chosen.actions[0])
+
+    def do_action(self, action):
+        """What a button under the chosen entry does: a `nemo` command in the
+        department's box, a control lit in its own window (never pressed), or a
+        project opened in the Workshop."""
+        app = self.app
+        if action.project:
+            app.refresh_projects(select=action.project)
+            app.back_to_workshop()
+            return "project"
+        if action.button:
+            win = app.real_window(self.key)
+            if win is not None:
+                win.after(150, lambda: light_button(win, action.button))
+            return "button"
+        bar = getattr(app, "ask_bar", None)
+        if bar is None:
+            return None
+        if bar.job is not None:
+            bar.tell("Still working on the last one here: Stop it first, or wait.")
+            return None
+        bar.tell(f"> {action.label}")
+        bar.run(action.argv, self.key)
+        return "run"
+
+    def new_entry(self):
+        """The list's "New" button: the Workshop makes a project; elsewhere the
+        department's box says what to type, and has the keyboard."""
+        if self.key == "workshop":
+            self.app.back_to_workshop()
+            self.app.new_project()
+            return
+        bar = getattr(self.app, "ask_bar", None)
+        if bar is not None:
+            bar.tell(self.desk.hint)
+            bar.focus()
 
     def _draw(self, W: int, H: int):
         """The scene, cropped to fill W x H, and the team along its foot."""
@@ -5499,10 +5668,11 @@ class IllustratedRoom(tk.Toplevel):
         self.app.open_brief_at(field)
 
     def _resized(self, event):
-        """Redraw at the new size, once it settles (a drag sends many)."""
-        if event.widget is not self:
+        """Redraw at the new size, once it settles (a drag sends many). The room
+        fills its Team tab."""
+        if event.widget is not self._team:
             return
-        W, H = event.width, event.height - self._bar.winfo_reqheight() - 8
+        W, H = event.width, event.height
         if W < 200 or H < 200 or (abs(W - self.W) < 8 and abs(H - self.H) < 8):
             return
         if self._resize_job:
@@ -5517,6 +5687,7 @@ class IllustratedRoom(tk.Toplevel):
         from .. import introductions
         self._intro = [(None, introductions.welcome(self.key))] + introductions.lines(self.key)
         self._intro_at = -1
+        self.tabs.select(self._team)                    # the team is shown while it is introduced
         self.skip.pack(side="left", padx=6)
         self.canvas.itemconfig(self._cap_bg, state="normal")
         self.canvas.itemconfig(self._cap, state="normal")

@@ -468,6 +468,36 @@ if [ "$TOOLS" -eq 1 ]; then
         echo "WordCraft $WC_V did not download or did not match its sha256"
     fi
     rm -f "$ROOT/var/tmp/wordcraft.tar.gz"
+    # Mixing, hand editing and rebuilding (owner, 2026-11-19: "use rea to make them
+    # available on the stick"; nemo/crafts.py LINUX holds the same files and hashes, a test
+    # ties them). Each whole folder into /opt/nemo/<key>, as nemo/crafts.py looks there.
+    # Their programs carry AVX code behind CPUID checks: under QEMU as a Sandy Bridge with
+    # AVX, AVX2, FMA and F16C off, soundcraft-cli mixed and bounced and filmcraft-cli made a
+    # project and exported H.264. About 177 MB in the squashfs (measured, xz).
+    for spec in \
+        "soundcraft 0.20.1 caefcf85c4f1138717d592d31ce5be07f2fca616ec36d63fac6760cdefbe28a9" \
+        "filmcraft 0.20.1 3e4fea3cb8d473e68f189a0a8792ba46160fab507adab3ab8920073fd41f24fa" \
+        "craft-anything 0.6.1 83ec0730c9117f399122b315c63ed4c3a8d31ac55bddd74cb8b33cd2f76ef704"; do
+        set -- $spec
+        CK=$1; CV=$2; CSHA=$3; CT="$CK-$CV-linux-x86_64"
+        if in_root curl -sSfL -o "/var/tmp/$CT.tar.gz" \
+                "https://github.com/storytold/$CK/releases/download/v$CV/$CT.tar.gz" \
+            && in_root sh -c "echo '$CSHA  /var/tmp/$CT.tar.gz' | sha256sum -c -"; then
+            in_root tar -xzf "/var/tmp/$CT.tar.gz" -C /var/tmp
+            rm -rf "$ROOT/opt/nemo/$CK"
+            mv "$ROOT/var/tmp/$CT" "$ROOT/opt/nemo/$CK"
+            chmod -R a+rX,go-w "$ROOT/opt/nemo/$CK"
+        else
+            echo "$CK $CV did not download or did not match its sha256"
+        fi
+        rm -f "$ROOT/var/tmp/$CT.tar.gz"
+    done
+    # The Mastering Engineer (nemo/mixing.py): Matchering 2.0.6 on Debian's own numeric
+    # packages (the venv sees them), itself without its dependencies.
+    in_root apt-get install -y -q python3-soundfile python3-statsmodels python3-resampy \
+        || echo "apt could not install Matchering's packages"
+    in_root /opt/nemo/venv/bin/pip install --quiet --no-deps "matchering==2.0.6" \
+        || echo "pip could not install matchering"
     echo "JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64" >> "$ROOT/etc/environment"
     # What is there and what is not, written into the image and shown here.
     # Not fatal: a missing tool makes one step skip, and a rebuild is hours.
@@ -488,6 +518,13 @@ if [ "$TOOLS" -eq 1 ]; then
         else echo "  MISSING  cadcraft-cli"; fi
         if in_root /opt/nemo/wordcraft/wordcraft-cli --version >/dev/null 2>&1; then echo "  ok       wordcraft-cli"
         else echo "  MISSING  wordcraft-cli"; fi
+        for c in soundcraft filmcraft craft-anything; do
+            if in_root /opt/nemo/$c/bin/$c-cli --version >/dev/null 2>&1; then echo "  ok       $c-cli"
+            else echo "  MISSING  $c-cli"; fi
+        done
+        if in_root sh -c "cd / && /opt/nemo/venv/bin/python -c 'import matchering' >/dev/null 2>&1"; then
+            echo "  ok       python: matchering"
+        else echo "  MISSING  python: matchering (does not import)"; fi
         if [ -x "$ROOT/opt/nemo/tools/ghidra_12.1.4_PUBLIC/support/analyzeHeadless" ]; then echo "  ok       ghidra"
         else echo "  MISSING  ghidra"; fi
         if [ "$PIO_OK" -eq 1 ]; then echo "  ok       an ESP32 firmware compiled with the toolchain in the image"
@@ -502,7 +539,9 @@ if [ "$LLAMA" -eq 1 ]; then
     in_root cmake -S /var/tmp/llama -B /var/tmp/llama/build -DCMAKE_BUILD_TYPE=Release \
         -DBUILD_SHARED_LIBS=OFF -DGGML_NATIVE=OFF -DGGML_SSE42=ON \
         -DGGML_AVX=OFF -DGGML_AVX2=OFF -DGGML_FMA=OFF -DGGML_F16C=OFF -DGGML_BMI2=OFF \
-        -DLLAMA_CURL=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF
+        -DLLAMA_CURL=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF \
+        -DLLAMA_BUILD_UI=OFF -DLLAMA_USE_PREBUILT_UI=OFF
+    # D277: no chat web page (see build-llama.sh); Nemo uses the API only.
     in_root sh -c 'cmake --build /var/tmp/llama/build --target llama-server -j "$(nproc)"'
     install -D -m 0755 "$ROOT/var/tmp/llama/build/bin/llama-server" "$ROOT/opt/nemo/bin/llama-server"
     rm -rf "$ROOT/var/tmp/llama"

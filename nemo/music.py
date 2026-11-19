@@ -39,6 +39,9 @@ class Track:
         return castable(self.path) is not None
 
 
+STEMS = "stems"                # <music shelf>/stems/<song>/: the Mix Engineer's (2026-11-19)
+
+
 def shelf(cfg) -> Path:
     return storeroom.shelf(cfg.path("paths.storeroom"), "music")
 
@@ -75,6 +78,8 @@ def tracks(cfg) -> list[Track]:
     for p in root.rglob("*"):
         if not (p.is_file() and p.suffix.lower() in AUDIO):
             continue
+        if p.relative_to(root).parts[0] == STEMS:
+            continue                   # parts of a song to mix, not tracks (nemo/mixing.py)
         st = p.stat()
         stamp = f"{st.st_size}:{int(st.st_mtime)}"
         rel = p.relative_to(root).as_posix()

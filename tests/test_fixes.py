@@ -72,6 +72,64 @@ class TestPowerPlan(unittest.TestCase):
         self.assertIn("boost_5v_mt3608", bat.add_parts)
         self.assertIn("boost_5v_mt3608", bat.why)
 
+    def test_every_battery_option_called_enough_passes_the_real_check(self):
+        # D287 (2026-11-19, the RFID brief): the planner counted the ESP32 board as fed by
+        # its own 3.3 V regulator from the cell, so no converter, and offered a 1000 mAh cell
+        # as "44% spare" for a design checks.current_sum failed (814 mA through the boost
+        # against 750 usable). What it calls enough must pass the check it is a fix for.
+        for refs in (CHEST, ["esp32_devkit_v1", "rc522", "dfplayer_mini"]):
+            plan = power_plan(P(refs), LIB, "battery")
+            for o in plan.options:
+                if not o.supply.battery:
+                    continue
+                b = apply_power(Brief(name="x", parts=list(refs)), o)
+                result = current_sum(P(b.parts), b.supply_ma).status
+                self.assertEqual(o.verdict in ("enough", "recommended"), result == "PASS",
+                                 f"{o.supply.key}: {o.verdict} but the check says {result}")
+                if o.verdict in ("enough", "recommended"):
+                    self.assertIn("boost_5v_mt3608", b.parts)
+
+    def test_a_battery_option_replaces_the_cell_it_does_not_choose(self):
+        # D288 (same brief): applying the 2000 mAh option left the 1000 mAh cell in the
+        # parts: two cells, and the wiring refuses that.
+        from nemo import harness
+        refs = CHEST + ["tp4056_protected", "lipo_1000", "boost_5v_mt3608"]
+        plan = power_plan(P(refs), LIB, "1000 mAh LiPo, USB charging")
+        best = next(o for o in plan.options if o.verdict == "recommended")
+        b = apply_power(Brief(name="x", parts=list(refs)), best)
+        self.assertNotIn("lipo_1000", b.parts)
+        self.assertIn(best.supply.key, b.parts)
+        self.assertEqual(sum(r.startswith("lipo") for r in b.parts), 1)
+        self.assertIsNotNone(harness.supply_chain(P(b.parts)))
+        # and the same through the fixes the window and `nemo fix` apply
+        from nemo.fixes import _power_fixes
+        brief = Brief(name="x", power="1000 mAh LiPo, USB charging", parts=list(refs))
+        fix = _power_fixes(brief, P(refs), LIB, "parts")[0]
+        self.assertIn("remove part lipo_1000", fix.changes)
+        b = apply_fix(brief, fix)
+        self.assertEqual(sum(r.startswith("lipo") for r in b.parts), 1)
+        self.assertIsNotNone(harness.supply_chain(P(b.parts)))
+
+    def test_a_bigger_cell_grows_the_box_to_what_the_concept_can_draw(self):
+        # D290 (same brief): the 2000 mAh option left the 125 x 95 x 20 mm box; the fit
+        # check (largest first) said it fitted, and the concept step (sensor away from the
+        # warm board) could not draw it. One answer now, and the fix grows the box.
+        from nemo import concept, enclosure
+        from nemo.fixes import _power_fixes
+        refs = CHEST + ["tp4056_protected", "lipo_1000", "boost_5v_mt3608"]
+        brief = Brief(name="x", power="1000 mAh LiPo, USB charging", parts=list(refs),
+                      envelope_mm=[125, 95, 20])
+        fix = _power_fixes(brief, P(refs), LIB, "parts")[0]
+        new = apply_fix(brief, fix)
+        self.assertNotEqual(new.envelope_mm, [125, 95, 20])
+        self.assertTrue(any(c.startswith("inside size") for c in fix.changes))
+        box = enclosure.box_for(new.envelope_mm, {})
+        concept.make(P(new.parts), box)                                   # draws: no error
+        old = enclosure.box_for([125, 95, 20], {})
+        with self.assertRaises(enclosure.EnclosureError):
+            concept.make(P(new.parts), old)
+        self.assertIsNotNone(enclosure.layout_fault(P(new.parts), [125, 95, 20]))
+
     def test_a_voltage_no_converter_in_the_library_makes_is_still_not_suitable(self):
         # The library's only converter outputs 5 V; a part needing a
         # voltage nothing converts to must still be correctly refused.
@@ -94,7 +152,8 @@ class TestPowerPlan(unittest.TestCase):
         mcu = LIB.get("esp32_devkit_v1")
         opt = next(o for o in power_plan([mcu, five], LIB, "").options
                   if o.supply.key == "lipo_2000")
-        expected_typical = mcu.current_ma + 480 * 5.0 / (3.7 * 0.93)
+        # D287: the board feeds every part, so its own draw goes through the converter too.
+        expected_typical = (mcu.current_ma + 480) * 5.0 / (3.7 * 0.93)
         expected_runtime = round(2000 / expected_typical, 1)
         self.assertEqual(opt.runtime_h, expected_runtime)
 
@@ -125,7 +184,9 @@ class TestPowerPlan(unittest.TestCase):
     def test_smallest_adequate_battery_is_recommended(self):
         plan = power_plan(P(CHEST), LIB, "500 mAh LiPo, USB charging")
         best = next(o for o in plan.options if o.verdict == "recommended")
-        self.assertEqual(best.supply.key, "lipo_1000")
+        # D287: through the boost the board needs, 560 mA at 5 V is 814 mA from the cell,
+        # over the 1000 mAh cell's 750 usable: the 2000 mAh cell is the smallest that does.
+        self.assertEqual(best.supply.key, "lipo_2000")
 
 
 class TestFixesChangeTheDesignNotTheRules(unittest.TestCase):

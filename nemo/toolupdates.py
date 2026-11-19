@@ -114,6 +114,14 @@ def _cadcraft():
     return VERSION
 
 
+def _craft(key: str):
+    """A nemo/crafts.py program's pinned version, if it is installed here."""
+    def ours():
+        from . import crafts
+        return crafts.PROGRAMS[key].version if crafts.find(key) else None
+    return ours
+
+
 TOOLS = (
     Tool("llama.cpp", "llama.cpp (the language model engine)", "doctors",
          "github:ggml-org/llama.cpp", r"b(\d+)", _llama),
@@ -139,6 +147,14 @@ TOOLS = (
          "github:storytold/cadcraft", SEMVER, _cadcraft),
     Tool("wordcraft", "WordCraft (books and the pack PDF)", "library",
          "github:storytold/wordcraft", SEMVER, _wordcraft),
+    Tool("soundcraft", "SoundCraft (the Mix Engineer)", "music",
+         "github:storytold/soundcraft", SEMVER, _craft("soundcraft")),
+    Tool("filmcraft", "FilmCraft (the Finishing Editor)", "film",
+         "github:storytold/filmcraft", SEMVER, _craft("filmcraft")),
+    Tool("opentoonz", "OpenToonz (the Animator)", "film",
+         "github:opentoonz/opentoonz", SEMVER, _craft("opentoonz")),
+    Tool("craft-anything", "Craft Anything (the Rebuilder)", "computer_lab",
+         "github:storytold/craft-anything", SEMVER, _craft("craft-anything")),
 )
 
 

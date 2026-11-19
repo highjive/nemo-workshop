@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "nemo-workshop"
-version = "0.1.0"
+version = "0.2.0"
 description = "Nemo Workshop: a local, offline creative assistant for modest hardware"
 requires-python = ">=3.11"
 license = { text = "GPL-3.0-or-later" }

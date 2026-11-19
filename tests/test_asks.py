@@ -87,6 +87,15 @@ class TestEachDepartmentReadsItsOwnWork(unittest.TestCase):
         self.assertIn("work for the Print Shop", r.say)
         self.assertIn("Type what you would like", ask("science", "  ").say)
 
+    def test_a_sculpture_is_answered_plainly(self):
+        # 2026-11-18: "make a 3d sculpture of mona lisa" got "did not understand".
+        r = ask("art_studio", "make a 3d sculpture of mona lisa")
+        self.assertEqual(r.kind, asks.SAY)
+        self.assertNotIn("did not understand", r.say)
+        self.assertIn("cannot sculpt a person, a face or a painting", r.say)
+        self.assertIn("plaque, box, pot, tag, stand", r.say)
+        self.assertEqual(ask("art_studio", "a tag saying SHED").kind, asks.RUN)   # kinds first
+
 
 @unittest.skipUnless(_sandbox.has_display(), "needs a display")
 class TestTheBoxInADepartment(unittest.TestCase):
@@ -148,6 +157,108 @@ class TestTheBoxInADepartment(unittest.TestCase):
                 self.app.update(); time.sleep(0.05)
         session.assert_not_called()
         self.assertEqual(self.A.department_of(self.app._embedded), "theatre")
+
+
+# Stand-ins for `nemo <argv>`: each a short Python program, so no model is needed.
+_SLOW = "import time\nfor i in range(40):\n    print('library line', i, flush=True); time.sleep(0.05)\n"
+_STORY = (
+    "import json, os, sys\n"
+    "mark = sys.argv[1]\n"
+    "if not os.path.exists(mark):\n"
+    "    print('@@NEMO ' + json.dumps({'stage': 'story', 'state': 'needs_model', 'mode': 'talk'}))\n"
+    "    print('Writing a story needs the language model. Load one with: nemo mode talk')\n"
+    "    sys.exit(3)\n"
+    "print('The story is written.')\n")
+_MODE = "import sys\nopen(sys.argv[1], 'w').close()\nprint('mode up')\n"
+
+
+@unittest.skipUnless(_sandbox.has_display(), "needs a display")
+class TestEachDepartmentItsOwnDesk(unittest.TestCase):
+    """D278: one job and one reply area were shared by every department; D279: a
+    story asked for in the box never loaded the model it needs."""
+
+    def setUp(self):
+        try:
+            from nemo.gui import app as A
+        except ImportError:
+            self.skipTest("tkinter not installed")
+        self.tmp = tempfile.TemporaryDirectory(); self.addCleanup(self.tmp.cleanup)
+        env = mock.patch.dict(os.environ, _sandbox.home_env(self.tmp.name)); env.start()
+        self.addCleanup(env.stop)
+        self.app = A.NemoApp(); self.app.update(); self.addCleanup(self.app.destroy)
+        room = self.app.open_department("library"); self.app.update()     # makes the box
+        room.end_introductions(); self.app.update()
+        self.bar = self.app.ask_bar
+        self.mark = os.path.join(self.tmp.name, "model-up")
+        self.ran = []
+
+    def argv(self, *args):
+        import sys
+        self.ran.append([a for a in args])
+        if args[0] == "mode":
+            return [sys.executable, "-c", _MODE, self.mark]
+        if args[0] == "story":
+            return [sys.executable, "-c", _STORY, self.mark]
+        if args[0] == "slow":
+            return [sys.executable, "-c", _SLOW]
+        from nemo.gui import controller as C
+        return C.__dict__["_real_nemo_argv"](*args)
+
+    def pump(self, until, limit=60):
+        t0 = time.time()
+        while not until() and time.time() - t0 < limit:
+            self.app.update(); time.sleep(0.05)
+
+    def text(self):
+        return self.bar.reply.get("1.0", "end")
+
+    def test_a_job_stays_in_its_department(self):
+        from nemo.gui import controller as C
+        C._real_nemo_argv = C.nemo_argv
+        self.addCleanup(lambda: delattr(C, "_real_nemo_argv"))
+        with mock.patch.object(C, "nemo_argv", side_effect=self.argv):
+            self.bar.show_for("library")
+            self.bar.run(["slow"])
+            self.pump(lambda: "library line 2" in self.text())
+            self.bar.show_for("science")
+            self.assertNotIn("library line", self.text())            # not carried over
+            reply = self.bar.send("100 F to C")
+            self.assertIsNotNone(reply)                              # not "still working"
+            self.assertNotIn("Still working", self.text())
+            self.pump(lambda: not self.bar.busy())
+            self.assertIn("37.7778", self.text())
+            self.assertNotIn("library line", self.text())            # the library's went home
+            self.bar.show_for("library")
+            self.assertIn("library line 39", self.text())            # and is there
+            self.assertNotIn("37.7778", self.text())
+
+    def test_a_story_loads_the_model_then_carries_on(self):
+        from nemo.gui import controller as C
+        C._real_nemo_argv = C.nemo_argv
+        self.addCleanup(lambda: delattr(C, "_real_nemo_argv"))
+        with mock.patch.object(C, "nemo_argv", side_effect=self.argv):
+            self.bar.show_for("library")
+            self.bar.run(["story", "write", "a-man-and-his-dog"])
+            self.pump(lambda: "The story is written." in self.text())
+        self.assertIn("Loading the model first", self.text())
+        self.assertIn("The story is written.", self.text())
+        self.assertEqual([r[0] for r in self.ran], ["story", "mode", "story"])
+        self.assertIn("--json", self.ran[0])                         # so the mode is named
+        self.assertEqual(self.ran[1], ["mode", "talk"])
+
+    def test_a_model_that_loads_but_does_not_answer_is_not_loaded_again_and_again(self):
+        import sys
+        from nemo.gui import controller as C
+        never = [sys.executable, "-c", _STORY, os.path.join(self.tmp.name, "never")]
+        calls = []
+        def argv(*args):
+            calls.append(args[0])
+            return [sys.executable, "-c", "print('up')"] if args[0] == "mode" else never
+        with mock.patch.object(C, "nemo_argv", side_effect=argv):
+            self.bar.show_for("library")
+            self.bar.run(["story", "write", "x"])
+            self.pump(lambda: "does not answer" in self.text())
+        self.assertEqual(calls, ["story", "mode", "story"])
 
 
 if __name__ == "__main__":

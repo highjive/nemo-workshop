@@ -220,6 +220,11 @@ STAFF: dict[str, Employee] = {e.key: e for e in (
        "Judges a model fit to keep, SHIP or DON'T SHIP, on Nemo's own jobs: asks it the "
        "task file's questions and compares it with the one it would replace, and keeps "
        "every verdict (nemo/shipcheck.py; owner, 2026-11-04)."),
+    # Craft Anything (owner, 2026-11-19; nemo/crafts.py): on the desktop and the stick, through his
+    # own signed-in coding agent; Nemo never signs in for him.
+    _e("computer_lab", "rebuilder", "Rebuilder",
+       "Opens Craft Anything, which studies a website, app or game you own or may examine "
+       "and has your own signed-in coding agent build your version; clean room by default."),
     _e("computer_lab", "foreman", "Foreman", _FOREMAN, working=False),
     _e("computer_lab", "timekeeper", "Timekeeper", _TIMEKEEPER, working=False),
     # The Storeroom (2026-10-21). It asks the model nothing, so it has no
@@ -275,6 +280,13 @@ STAFF: dict[str, Employee] = {e.key: e for e in (
        "connection, and lets it go at the end."),
     _e("music", "writer", "Writer",
        "Keeps your playlists, as .m3u files other players read too."),
+    # Mixing and mastering (owner, 2026-11-19: "music mixing"; nemo/mixing.py, crafts.py).
+    _e("music", "mixer", "Mix Engineer",
+       "Mixes your stems into one track with SoundCraft: each brought to the same level by "
+       "code, moved as you ask, bounced, and kept as a session to finish by hand."),
+    _e("music", "mastering", "Mastering Engineer",
+       "Masters a mix to sound like a reference track you choose (Matchering): its "
+       "loudness, tone and width. Nemo never fetches a reference."),
     # Audio (owner, 2026-10-21; nemo/audio.py): making sound, where the
     # Music Room plays it.
     _e("audio", "narrator", "Narrator",
@@ -320,6 +332,13 @@ STAFF: dict[str, Employee] = {e.key: e for e in (
        "clips; makes slideshows of pictures with music."),
     _e("film", "writer", "Writer",
        "Writes the title and credits cards and the subtitles."),
+    # Animation and hand editing (owner, 2026-11-19: "anime studio", "video creation";
+    # nemo/crafts.py).
+    _e("film", "animator", "Animator",
+       "Draws and animates in OpenToonz, the Toonz line of cel animation, and renders a "
+       "scene's frames into a video for the videos shelf."),
+    _e("film", "finisher", "Finishing Editor",
+       "Makes a film's pieces and subtitles into a FilmCraft project to cut by hand."),
     # Home (owner's choice of a suggested department, 2026-10-22; nemo/home.py).
     _e("home", "surveyor", "Surveyor",
        "Lists the devices on your network from what they announce and the address list "

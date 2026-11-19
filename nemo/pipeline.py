@@ -304,11 +304,14 @@ class Pipeline:
         said_first += requested.shape_notes(prompt, brief)
         if not brief.no_parts:
             said_first += requested.library_refs(brief, self.lib.parts, prompt)
+            said_first += requested.held_media(brief, self.lib.parts)          # D284
+            said_first += requested.answered_questions(brief)                  # D284
             said_first += requested.unasked_parts(prompt, brief, chosen.get("parts", ()))
             said_first += requested.purposes_from_request(prompt, brief)      # D270
             said_first += requested.board_in_parts(brief, self.lib.parts)
             said_first += requested.asked_cell(prompt, brief, self.lib.parts)
             said_first += requested.asked_charger(prompt, brief, self.lib.parts)
+            said_first += requested.cell_converter(brief, self.lib.parts)      # D286
             said_first += requested.envelope_fits(prompt, brief, self.lib.parts)
             said_first += requested.power_figures(prompt, brief)
         complete, missing = brief.complete

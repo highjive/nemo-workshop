@@ -106,6 +106,21 @@ class TestTheBrief(Installed):
                          [("function", -1, "Blunderbust", "Blunderbuss")])
         self.assertTrue(writer.corrected(b, sp[0]).startswith("A replica Blunderbuss gun"))
 
+    def test_a_hyphen_is_a_style_not_a_misspelling(self):
+        # D285 (2026-11-19, the RFID brief): "pre-assigned" -> "preassigned" stopped the run.
+        b = self.brief(function="Each card has a pre-assigned song and a tune-up.")
+        joined = "\n\n".join(t for _, _, t in writer._brief_texts(b)) + "\n\n"
+
+        def lint(word, fix):
+            at = joined.index(word)
+            return writer.Lint("SpellCheck", "Spelling", "", at, at + len(word), word,
+                               [f'Replace with: "{fix}"'])
+        lints = [lint("pre-assigned", "preassigned"), lint("tune-up", "tune up"),
+                 lint("card", "cart")]
+        with mock.patch.object(writer, "check", return_value=lints):
+            sp = writer.brief_spelling(b)
+        self.assertEqual([s.old for s in sp], ["card"])
+
     def test_a_word_in_a_list_field_is_corrected_in_its_item(self):
         b = self.brief(function="ok", constraints=["one", "must be waterprof"])
         s = writer.Spelling("constraints", 1, "waterprof", "waterproof", "")

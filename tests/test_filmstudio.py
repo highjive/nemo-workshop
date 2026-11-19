@@ -92,6 +92,19 @@ class TestTheDirector(AHome):
         plan = F.plan_story(self.story())
         self.assertIn('from the story "The Lamp That Waited"', plan.scenes[0].prompt)
 
+    def test_a_scenes_colours_are_painted(self):
+        # D281 (2026-11-19, the owner's film test): each of seven towers had its colour in
+        # the story ("a teal thread", "green-tinged"), never in the first sentence the prompt
+        # took, and none was painted. A colour of light comes before a passing one.
+        text = ("A structure grown the way coral grows, green-tinged and slow. It hums. "
+                "A teal thread of light reaches down.")
+        self.assertEqual(F.colours(text), ["green", "teal"])
+        p = F._prompt(text, "The Towers")
+        self.assertIn("in green and teal light", p)
+        self.assertTrue(p.endswith("A structure grown the way coral grows, green-tinged and slow."))
+        self.assertEqual(F.colours("He climbed the stairs."), [])
+        self.assertNotIn(" light:", F._prompt("He climbed the stairs.", "The Brave Cat"))
+
     def test_a_long_story_is_held_to_twelve_scenes(self):
         plan = F.plan_story(self.story(chapters=10, paras=6))
         self.assertEqual(len(plan.scenes), F.MAX_SCENES)
@@ -152,6 +165,19 @@ class TestTheFilmWithStandIns(AHome):
         self.assertIn("1 picture(s) painted", made.notes[0])
         self.assertTrue(made.subtitles.is_file())
 
+    def test_each_scene_is_painted_from_its_own_seed(self):
+        # D280 (2026-11-19): every scene was painted from the Artist's one default seed, so
+        # twelve pictures shared one layout and seven different towers looked alike.
+        plan = F.Plan("Three Towers", "", [F.Scene(f"Tower {n}.", f"p{n}") for n in range(3)])
+        with mock.patch.object(F, "_run"), \
+             mock.patch("nemo.voice.speak", side_effect=fake_voice), \
+             mock.patch("nemo.artist.paint",
+                        side_effect=lambda out, *a, **k: self.picture(str(out))) as paint:
+            F.make_film(self.cfg, plan, paint=True)
+        seeds = [c.kwargs.get("seed") for c in paint.call_args_list]
+        self.assertEqual(len(set(seeds)), 3)
+        self.assertNotIn(None, seeds)
+
     def test_no_painting_uses_the_cover(self):
         story = self.story(chapters=1, paras=1)
         cover = self.picture("cover.png")
@@ -174,7 +200,8 @@ class TestTheFilmWithStandIns(AHome):
 class TestTheDepartment(AHome):
     def test_the_team_and_its_tools(self):
         self.assertEqual([e.title for e in staff.team("film")],
-                         ["Director", "Storyboard Artist", "Narrator", "Editor", "Writer"])
+                         ["Director", "Storyboard Artist", "Narrator", "Editor", "Writer",
+                      "Animator", "Finishing Editor"])
         self.assertTrue(all(e.working for e in staff.team("film")))
 
     def test_backups_leave_the_working_files_out(self):

@@ -148,6 +148,79 @@ class TestPartsNobodyAskedFor(unittest.TestCase):
         self.assertEqual(b.parts, ["bme280"])                       # not one the library has
 
 
+RFID = ("an RFID music player: tap a card on the reader and it plays that card's song from an "
+        "SD card through a small speaker, battery powered and rechargeable over USB")
+
+
+class TestAnRfidPlayer(unittest.TestCase):
+    """qwen3-8b's draft on the desktop, 2026-11-19 (the RFID brief, Nemo first)."""
+
+    def draft(self):
+        return Brief(name="rfid-music-player", mcu="esp32_devkit_v1",
+                     function="The RFID music player reads an RFID card, identifies the card's "
+                              "associated song, and plays it through a small speaker using an SD "
+                              "card.",
+                     parts=["rc522", "dfplayer_mini", "esp32_devkit_v1", "speaker_8ohm_20mm",
+                            "sd_card", "usb_a_socket", "lipo_1000", "tp4056_protected"],
+                     constraints=["Your request: battery powered and rechargeable over USB"],
+                     open_questions=["What type of SD card is required for the DFPlayer Mini?",
+                                     "What is the maximum number of songs that can be stored on "
+                                     "the SD card?",
+                                     "What is the required format for the audio files to be "
+                                     "played?",
+                                     "Should the volume be adjustable?",
+                                     "Is the storage enough?"])
+
+    def test_charging_over_usb_is_not_a_usb_socket(self):
+        # D283: "rechargeable over USB" kept the USB-A socket, which is for a USB device to
+        # plug into; the charger's own port charges.
+        b = self.draft()
+        said = requested.unasked_parts(RFID, b)
+        self.assertNotIn("usb_a_socket", b.parts)
+        self.assertIn("tp4056_protected", b.parts)
+        self.assertIn("usb_a_socket", said[0])
+        b = self.draft()
+        requested.unasked_parts("a dock that reads a USB device and sends it to the PC", b)
+        self.assertIn("usb_a_socket", b.parts)
+
+    def test_the_players_card_is_said_not_listed(self):
+        # D284: "sd_card" stopped the Inspector: the library has no such part, rightly.
+        from nemo.parts import PartsLibrary
+        known = PartsLibrary.load().parts
+        b = self.draft()
+        said = requested.held_media(b, known)
+        self.assertNotIn("sd_card", b.parts)
+        self.assertIn("32 GB", said[0])
+        b = self.draft(); b.parts.remove("dfplayer_mini")
+        self.assertEqual(requested.held_media(b, known), [])          # nothing holds it
+        self.assertIn("sd_card", b.parts)
+
+    def test_a_cell_for_a_5_v_board_gets_its_converter(self):
+        # D286: a LiPo and a charger for an ESP32 DevKit (VIN 5 V) and no converter; the
+        # electrical step left the battery and charger unwired.
+        from nemo import harness
+        from nemo.parts import PartsLibrary
+        known = PartsLibrary.load().parts
+        b = self.draft()
+        b.parts = [r for r in b.parts if r not in ("sd_card", "usb_a_socket")]
+        self.assertIsNone(harness.supply_chain([known[r] for r in b.parts]))
+        said = requested.cell_converter(b, known)
+        self.assertEqual(b.parts[-1], "boost_5v_mt3608")
+        self.assertIn("VIN takes 5 V", said[0])
+        chain = harness.supply_chain([known[r] for r in b.parts])
+        self.assertEqual([p.ref for p in chain], ["lipo_1000", "tp4056_protected", "boost_5v_mt3608"])
+        self.assertEqual(requested.cell_converter(b, known), [])          # not twice
+        b = Brief(name="x", mcu="esp32_devkit_v1", parts=["esp32_devkit_v1", "bme280"])
+        self.assertEqual(requested.cell_converter(b, known), [])          # no cell, no converter
+
+    def test_what_the_library_knows_is_not_asked(self):
+        b = self.draft()
+        said = requested.answered_questions(b)
+        self.assertEqual(b.open_questions, ["Should the volume be adjustable?", "Is the storage enough?"])
+        self.assertIn("3 open question(s)", said[0])
+        self.assertIn("001.mp3", said[0])
+
+
 class TestTheInspectorsWords(unittest.TestCase):
     def test_the_shape_is_not_quoted_as_linking_words(self):
         # 2026-11-05: "a 3D-printed replica that simulates the firing action of a

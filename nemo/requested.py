@@ -124,6 +124,15 @@ BATTERY_PARTS = ("tp4056_protected", "lipo_1000", "lipo_2000", "eemb_lipo_500",
 # taken out wrongly is worse than one the Inspector asks about ("a tag player").
 MORE_WORDS = {"rc522": ("tag", "tags", "card", "cards", "fob", "fobs")}
 
+# D283 (2026-11-19, an RFID player through qwen3-8b on the desktop: "rechargeable over USB"
+# kept a USB-A socket, which is for a USB DEVICE to plug into (the wireless dock); the
+# charger's own USB port does the charging). Parts the Inspector has no purpose for but
+# this step can judge: the words that ask for them.
+OWN_WORDS = {"usb_a_socket": ("usb device", "usb devices", "usb stick", "usb sticks",
+                              "flash drive", "keyboard", "mouse", "gamepad", "controller",
+                              "dock", "usb host", "plug a", "plugged in", "plugs in",
+                              "usb-a", "usb a socket")}
+
 
 def unasked_parts(request: str, brief, chosen=()) -> list[str]:
     """Take out (in place) the parts the model added for a purpose the request
@@ -141,7 +150,7 @@ def unasked_parts(request: str, brief, chosen=()) -> list[str]:
     for ref in list(brief.parts or []):
         if ref == brief.mcu or ref in chosen:
             continue
-        words = BATTERY if ref in BATTERY_PARTS else PURPOSE.get(ref)
+        words = BATTERY if ref in BATTERY_PARTS else (PURPOSE.get(ref) or OWN_WORDS.get(ref))
         if words and ref in MORE_WORDS:
             words = tuple(words) + MORE_WORDS[ref]
         if words and not _said(words, asked):
@@ -220,6 +229,53 @@ def library_refs(brief, known, request: str = "") -> list[str]:
     return list(dict.fromkeys(said))
 
 
+# D284 (same run): the model listed "sd_card" as a part; it is the DFPlayer's memory card,
+# held in the module's slot and wired to nothing, and the Inspector stopped on it. A medium
+# a chosen part holds is said, not listed. The card's rules are DFRobot's (wiki, SKU
+# DFR0299), as nemo/audio.py's Sound Engineer has them.
+HELD = {"dfplayer_mini": (re.compile(r"^(?:micro_?)?(?:sd|tf|memory)(?:_?card)?s?$|^microsd(?:_card)?$"),
+                          "a FAT16 or FAT32 microSD card of up to 32 GB, in folders 01, 02... of "
+                          "up to 255 songs each (001.mp3, 002.mp3...); MP3 is the sure format. "
+                          "The Audio department's SD-card job lays a card out that way")}
+
+
+def held_media(brief, known) -> list[str]:
+    """Take out (in place) a part reference that is a medium another chosen part holds
+    (the DFPlayer's microSD card); what was done, with the medium's rules."""
+    said = []
+    for holder, (pattern, rules) in HELD.items():
+        if holder not in (brief.parts or []):
+            continue
+        for ref in [r for r in brief.parts if r not in known and pattern.match(r or "")]:
+            brief.parts.remove(ref)
+            said.append(f"Writer: {ref} is the memory card the {getattr(known[holder], 'name', holder)} "
+                        f"holds in its slot, not a part to wire; taken off the parts list. It "
+                        f"takes {rules}.")
+    return said
+
+
+# A question the DFPlayer's card rules answer: one naming the card, or asking the audio
+# files' format or how many songs. Not "Is the storage enough?" (a test's brief, which
+# only the owner can answer).
+_CARD_QUESTION = re.compile(r"\b(?:sd|microsd|tf)\b|\bmemory card\b|"
+                            r"\bformat\b.*\b(?:audio|music|song|songs|files?|tracks?)\b|"
+                            r"\b(?:audio|music|song|songs|files?|tracks?)\b.*\bformat\b|"
+                            r"\b(?:how many|maximum|max|number of)\b.*\b(?:songs?|tracks?)\b", re.I)
+
+
+def answered_questions(brief) -> list[str]:
+    """Open questions the library already answers, taken out (in place) and answered:
+    with a DFPlayer chosen, what card, how many songs, what format (D284)."""
+    if "dfplayer_mini" not in (brief.parts or []) or not brief.open_questions:
+        return []
+    asked = [q for q in brief.open_questions if _CARD_QUESTION.search(str(q))]
+    if not asked:
+        return []
+    brief.open_questions = [q for q in brief.open_questions if q not in asked]
+    return [f"Writer: {len(asked)} open question(s) about the DFPlayer's card are answered by "
+            f"its maker (DFRobot): it takes {HELD['dfplayer_mini'][1]}."]
+
+
 def _named(name: str, request: str) -> bool:
     """The request says this part's model: the first word of its name
     ("ESP32-C3" of "ESP32-C3 DevKit (RISC-V, WiFi + BLE)"), hyphens aside."""
@@ -275,6 +331,39 @@ def asked_charger(request: str, brief, known) -> list[str]:
     brief.open_questions = [q for q in brief.open_questions or [] if q not in asked]
     return [f"Writer: your request asks for a charger; the library's is {have[0]}, added."
             + (" That answers: " + " ".join(asked) if asked else "")]
+
+
+def cell_converter(brief, known) -> list[str]:
+    """The library's converter put among the parts (in place) where a cell feeds a board whose
+    highest supply pin wants more than a cell gives, and exactly one converter in the library
+    makes that voltage; what was done.
+
+    D286 (2026-11-19, the RFID brief on the desktop): a LiPo and a charger for an ESP32 DevKit
+    (VIN 5 V) and no converter; the electrical step then left the battery and charger
+    unwired, as harness.supply_chain wants cell, charger, converter, board."""
+    from .harness import board_supplies
+    parts = list(brief.parts or [])
+    if brief.no_parts or not any(c in parts for c in CELLS):
+        return []
+    have = [known[r] for r in parts if r in known]
+    if any(getattr(p, "category", "") == "power" and getattr(p, "output_v", None) for p in have):
+        return []                                                    # it has one already
+    boards = [p for p in have if getattr(p, "category", "") == "mcu"]
+    if len(boards) != 1 or not getattr(boards[0], "pins", None) and not boards[0].supply_v:
+        return []
+    pin, volts = board_supplies(boards[0])[-1]
+    cell = max(float(v) for c in parts if c in known for v in (known[c].supply_v or [3.7])
+               if c in CELLS) if any(c in known for c in parts if c in CELLS) else 3.7
+    if volts <= cell + 0.35 or pin.upper() == "VBUS":
+        return []
+    convs = [r for r, p in dict(known).items() if getattr(p, "category", "") == "power"
+             and getattr(p, "output_v", None) and any(abs(float(v) - volts) <= 0.35 for v in p.output_v)]
+    if len(convs) != 1:
+        return []
+    brief.parts = parts + convs
+    return [f"Writer: the cell gives about {cell:g} V and the {getattr(boards[0], 'name', 'board')}'s "
+            f"{pin} takes {volts:g} V; the library's {convs[0]} ({known[convs[0]].name}) steps it up, "
+            "added. Set it to its voltage before connecting anything."]
 
 
 def envelope_fits(request: str, brief, known) -> list[str]:

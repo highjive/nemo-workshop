@@ -299,9 +299,14 @@ DEFAULT_HW = {"min_wall_mm": 1.2, "nozzle_mm": 0.4}
 
 
 def layout_fault(parts: list[Part], envelope_mm: list[float], hw: dict | None = None) -> str | None:
-    """Why auto_layout cannot place `parts` in this envelope, or None if it can."""
+    """Why auto_layout cannot place `parts` in this envelope, or None if it can.
+
+    D290 (2026-11-19, the RFID brief): in the order the steps lay them out, sensors at one
+    end and the warm part at the other (thermal_order: concept.nemos_layout and the
+    enclosure step both use it). Largest first fitted a box the concept step then could
+    not draw in, so the brief's grown box and the power fix's were too small."""
     try:
-        auto_layout(parts, box_for(envelope_mm, dict(hw or DEFAULT_HW)))
+        auto_layout(parts, box_for(envelope_mm, dict(hw or DEFAULT_HW)), thermal_order(parts))
     except EnclosureError as exc:
         return str(exc)
     return None

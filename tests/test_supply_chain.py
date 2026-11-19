@@ -155,6 +155,21 @@ class TestTheWiring(ChainCase):
                       "boost_5v_mt3608 to esp32_devkit_v1.VIN. The cell's negative goes only "
                       "to the next board in that chain, never straight to ground.", self.notes)
 
+    def test_the_schematic_keeps_each_link_its_own_net(self):
+        # D289 (2026-11-19, the RFID brief): both 3.7 V links were named +3V7 and merged into
+        # one net, and the chain's negatives into GND: the charger's protection bypassed in
+        # the schematic, and the harness check failed on it.
+        from nemo import schematic
+        nets = schematic.nets(self.doc, self.parts)
+        where = {end: name for name, ends in nets.items() for end in ends}
+        self.assertNotEqual(where[("lipo_1000", "BAT+")], where[("tp4056_protected", "OUT+")])
+        self.assertEqual(where[("lipo_1000", "BAT+")], where[("tp4056_protected", "B+")])
+        self.assertNotEqual(where[("lipo_1000", "BAT-")], where[("esp32_devkit_v1", "GND")])
+        self.assertEqual(where[("esp32_devkit_v1", "GND")], "GND")             # the board's
+        script = schematic.skidl_script(self.doc, self.parts)
+        self.assertEqual(script.count('Part("power", "PWR_FLAG")'),
+                         len([n for n in nets if n.startswith(("+", "GND"))]))
+
     def test_done_twice_it_changes_nothing_and_says_nothing_more(self):
         again, notes = harness.wire_power(self.doc, self.parts)
         self.assertEqual(again, self.doc)

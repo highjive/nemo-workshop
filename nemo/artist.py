@@ -76,6 +76,20 @@ SD_CUDA = (
 GPU_VRAM_MB = 5100
 GPU_RAM_MB = 700
 
+# Nemo signs what it paints (owner, 2026-11-18: "if putting signature it should
+# be its name NEMO as it is creating them"). SD-Turbo paints signature-like
+# scribbles near the edges, mostly the bottom corners (O40: not fixable by the
+# prompt; seen again on a book cover the same day). So the edges go first, the
+# picture is scaled back to its own size, and code signs it: the model never
+# writes the name, so it is always spelled right.
+SIGNATURE = "Nemo"
+TRIM_SIDES = 0.04            # of the width, from each side
+TRIM_BOTTOM = 0.07           # of the height
+SIGN_HEIGHT = 0.035          # the signature's letter size, of the height
+SIGNATURE_FONTS = ("segoescb.ttf", "segoesc.ttf",                     # Windows: Segoe Script
+                   "/usr/share/fonts/truetype/dejavu/DejaVuSerif-BoldItalic.ttf",
+                   "/usr/share/fonts/truetype/dejavu/DejaVuSerif-Italic.ttf")
+
 
 class ArtistError(RuntimeError):
     """For the owner: why no cover was drawn, and what to do."""
@@ -198,13 +212,52 @@ def fit_reference(src: Path, size, dest: Path) -> Path:
     return dest
 
 
+def _signature_font(size: int):
+    from PIL import ImageFont
+    for name in SIGNATURE_FONTS:
+        try:
+            return ImageFont.truetype(name, size)
+        except OSError:
+            continue
+    try:
+        return ImageFont.load_default(size)          # Pillow 10.1 and later
+    except TypeError:
+        return ImageFont.load_default()
+
+
+def sign(path: Path, name: str = SIGNATURE) -> Path:
+    """Trim the edges where the image model scribbles fake signatures, scale
+    the picture back to its own size, and sign it `name`, small, in the
+    bottom right, in ink that reads on whatever is painted there."""
+    from PIL import Image, ImageDraw
+    path = Path(path)
+    im = Image.open(path).convert("RGB")
+    w, h = im.size
+    sx, sb = round(w * TRIM_SIDES), round(h * TRIM_BOTTOM)
+    im = im.crop((sx, 0, w - sx, h - sb)).resize((w, h), Image.LANCZOS)
+    font = _signature_font(max(12, round(h * SIGN_HEIGHT)))
+    probe = ImageDraw.Draw(im)
+    left, top, right, bottom = probe.textbbox((0, 0), name, font=font)
+    margin = max(4, round(min(w, h) * 0.03))
+    x, y = w - margin - right, h - margin - bottom
+    under = im.crop((max(0, x + left), max(0, y + top), min(w, x + right), min(h, y + bottom))).convert("L")
+    light = sum(under.getdata()) / max(1, under.width * under.height) < 128
+    ink = (236, 226, 204, 215) if light else (38, 30, 24, 215)
+    layer = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    ImageDraw.Draw(layer).text((x, y), name, font=font, fill=ink)
+    Image.alpha_composite(im.convert("RGBA"), layer).convert("RGB").save(path, format="PNG")
+    return path
+
+
 def paint(out: Path, prompt: str, cfg=None, seed: int = 7, say=print,
           available_mb=None, popen=subprocess.Popen, size=(SIZE, SIZE),
           reference: Path | None = None, strength: float = 0.40, steps: int = 1,
-          vram_free=None) -> Path:
+          vram_free=None, signed: bool = True) -> Path:
     """Paint `prompt` to `out` (a PNG). Raises ArtistError, saying why, if it
     cannot: no engine or model, too little memory, or no picture came back.
-    `reference`: a picture to paint from (fitted to `size` first)."""
+    `reference`: a picture to paint from (fitted to `size` first).
+    `signed`: Nemo signs it (sign()); a picture that cannot be signed is
+    kept, unsigned, and that is said."""
     out = Path(out)
     t = tools(cfg)
     if available_mb is None:
@@ -244,6 +297,11 @@ def paint(out: Path, prompt: str, cfg=None, seed: int = 7, say=print,
     if rc != 0 or not part.is_file() or part.read_bytes()[:8] != b"\x89PNG\r\n\x1a\n":
         part.unlink(missing_ok=True)
         raise ArtistError(f"The image engine stopped without a picture (code {rc}).")
+    if signed:
+        try:
+            sign(part)
+        except Exception as e:                    # an unsigned picture is still a picture
+            say(f"Artist: the picture is not signed ({e}).")
     part.replace(out)
     return out
 

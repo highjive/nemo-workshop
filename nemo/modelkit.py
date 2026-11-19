@@ -378,7 +378,8 @@ def models(cfg) -> list[dict]:
             checks = json.loads((d.parent / "checks.json").read_text(encoding="utf-8"))
         except (OSError, ValueError):
             checks = []
-        out.append({"name": json.loads(d.read_text(encoding="utf-8")).get("name", d.parent.name),
+        spec = json.loads(d.read_text(encoding="utf-8"))
+        out.append({"name": spec.get("name", d.parent.name), "kind": spec.get("kind", "shapes"),
                     "folder": d.parent,
                     "passed": bool(checks) and all(c["status"] != "FAIL" for c in checks)})
     return out

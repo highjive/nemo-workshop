@@ -191,6 +191,58 @@ class TestOnTheDesktopsGpu(Case):
         self.assertEqual(pinned, {(f, h, str(b)) for f, b, h in artist.SD_CUDA})
 
 
+class RealPicture(FakeEngine):
+    """sd-cli that paints a real picture: mid-grey, with a dark scribble in the
+    bottom-left corner where SD-Turbo puts its fake signatures (O40)."""
+
+    def __call__(self, cmd, **kw):
+        proc = super().__call__(cmd, **kw)
+        from PIL import Image, ImageDraw
+        w, h = int(cmd[cmd.index("-W") + 1]), int(cmd[cmd.index("-H") + 1])
+        im = Image.new("RGB", (w, h), (128, 128, 128))
+        ImageDraw.Draw(im).rectangle((2, h - 20, 40, h - 4), fill=(0, 0, 0))
+        im.save(cmd[cmd.index("-o") + 1])
+        return proc
+
+
+class TestNemoSignsItsPaintings(Case):
+    """D276 (owner, 2026-11-18): a signature on Nemo's paintings is Nemo's own,
+    written by code; the model's fake ones near the edges are cut away."""
+
+    def paint(self, **kw):
+        said = []
+        out = artist.paint(self.t / "p.png", "a lighthouse", self.cfg, say=said.append,
+                           available_mb=lambda: 4000, popen=RealPicture(), size=(512, 768), **kw)
+        from PIL import Image
+        return Image.open(out).convert("RGB"), said
+
+    def test_the_fake_signature_corner_is_gone_and_the_size_kept(self):
+        im, said = self.paint()
+        self.assertEqual(im.size, (512, 768))
+        corner = im.crop((0, 768 - 24, 48, 768)).convert("L")
+        self.assertGreater(min(corner.getdata()), 100)          # no black scribble left
+        self.assertFalse(any("not signed" in s for s in said))
+
+    def test_it_is_signed_nemo_in_the_bottom_right(self):
+        im, _ = self.paint()
+        signed = im.crop((512 - 140, 768 - 60, 512, 768)).convert("L")
+        self.assertGreater(max(abs(v - 128) for v in signed.getdata()), 60)   # ink is there
+        self.assertEqual(artist.SIGNATURE, "Nemo")
+        top = im.crop((0, 0, 512, 600)).convert("L")
+        self.assertLess(max(abs(v - 128) for v in top.getdata()), 4)         # and nowhere else
+
+    def test_unsigned_when_asked(self):
+        im, _ = self.paint(signed=False)
+        self.assertEqual(im.getpixel((10, 768 - 10)), (0, 0, 0))             # left as painted
+
+    def test_a_picture_that_cannot_be_signed_is_kept_and_that_is_said(self):
+        said = []
+        out = artist.paint(self.t / "p.png", "x", self.cfg, say=said.append,
+                           available_mb=lambda: 4000, popen=FakeEngine())    # not a real PNG
+        self.assertTrue(out.is_file())
+        self.assertTrue(any("not signed" in s for s in said))
+
+
 class TestTheArtistIsStaff(unittest.TestCase):
     def test_it_draws_concepts_and_covers(self):
         # Two departments, two Artists (2026-10-21): concepts in the Art

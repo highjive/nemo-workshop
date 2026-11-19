@@ -228,6 +228,10 @@ class Spelling:
     message: str
 
 
+def _letters(word: str) -> str:
+    return re.sub(r"[\s\-‐‑]", "", word or "").lower()
+
+
 def brief_spelling(brief, library=None, cfg=None, run=None) -> list[Spelling] | None:
     """Misspelt words in the brief's prose, each with Harper's one
     replacement. None where Harper is not installed."""
@@ -243,6 +247,11 @@ def brief_spelling(brief, library=None, cfg=None, run=None) -> list[Spelling] | 
     out = []
     for l in lints:
         if l.kind != "Spelling" or l.replacement is None:
+            continue
+        # D285 (2026-11-19, the RFID brief on the desktop): Harper offered "preassigned" for the
+        # model's "pre-assigned" and the Inspector stopped the run. A word written with or
+        # without a hyphen or space is the same word: a style, not a misspelling.
+        if _letters(l.matched) == _letters(l.replacement):
             continue
         for f, i, a, b in spans:
             if a <= l.start < b:

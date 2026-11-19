@@ -53,7 +53,11 @@ cmake -S "$SRC" -B "$SRC/build" \
     -DGGML_AVX="$AVX" \
     -DGGML_AVX2="$AVX2" -DGGML_FMA="$AVX2" -DGGML_F16C="$AVX2" -DGGML_BMI2="$AVX2" -DGGML_AVX512=OFF \
     -DLLAMA_CURL=OFF \
-    -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=ON
+    -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=ON \
+    -DLLAMA_BUILD_UI=OFF -DLLAMA_USE_PREBUILT_UI=OFF
+# D277: no chat web page. A --depth 1 clone asks Hugging Face for "b1",
+# falls back to "latest", and that no longer matches b11175: the build
+# stopped. Nemo uses the server's API only.
 cmake --build "$SRC/build" --target llama-server -j "$(nproc)"
 
 install -d "$PREFIX/bin"

@@ -83,7 +83,8 @@ class TestTheShelf(AShelf):
         self.assertEqual(cases[1].actions, ("Play here", "Cast..."))
 
     def test_the_team(self):
-        self.assertEqual([e.title for e in staff.team("music")], ["Player", "DJ", "Writer"])
+        self.assertEqual([e.title for e in staff.team("music")], ["Player", "DJ", "Writer", "Mix Engineer",
+                                                                  "Mastering Engineer"])
 
 
 class TestTheDJ(AShelf):
